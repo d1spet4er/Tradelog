@@ -2,35 +2,36 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import CustomSelect from '../components/ui/CustomSelect'
 
-const NEEDS_SYMBOL = ['binance']
-
 const DEPTH_OPTIONS = [
-  { value: '7', label: 'Последние 7 дней' },
   { value: '30', label: 'Последние 30 дней' },
   { value: '90', label: 'Последние 90 дней' },
   { value: '180', label: 'Последние 180 дней' },
   { value: '365', label: 'Последний год' },
-  { value: '700', label: 'Последние ~2 года' },
 ]
+
+function displayExchange(exchange) {
+  if (exchange === 'tiger-binance') return 'Tiger Trade — Binance Futures'
+  if (exchange === 'binance') return 'Binance Futures'
+  return exchange
+}
 
 function Trades() {
   const [keys, setKeys] = useState([])
   const [selectedKeyId, setSelectedKeyId] = useState('')
-  const [symbol, setSymbol] = useState('')
-  const [daysBack, setDaysBack] = useState('90')
+  const [daysBack, setDaysBack] = useState('365')
   const [trades, setTrades] = useState([])
   const [syncing, setSyncing] = useState(false)
+  const [pendingExport, setPendingExport] = useState(null)
   const [error, setError] = useState(null)
 
   async function loadKeys() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('exchange_keys')
       .select('id, exchange, label')
       .order('created_at', { ascending: false })
-    setKeys(data || [])
-    if (data && data.length > 0 && !selectedKeyId) {
-      setSelectedKeyId(data[0].id)
-    }
+    const nextKeys = data || []
+    setKeys(nextKeys)
+    if (nextKeys.length > 0 && !selectedKeyId) setSelectedKeyId(nextKeys[0].id)
   }
 
   async function loadTrades() {
@@ -38,9 +39,8 @@ function Trades() {
       .from('trades')
       .select('*')
       .order('trade_time', { ascending: false })
-
     if (error) setError(error.message)
-    else setTrades(data)
+    else setTrades(data || [])
   }
 
   useEffect(() => {
@@ -48,11 +48,9 @@ function Trades() {
     loadTrades()
   }, [])
 
-  const selectedKey = keys.find((k) => k.id === selectedKeyId)
-  const needsSymbol = NEEDS_SYMBOL.includes(selectedKey?.exchange)
   const keyOptions = keys.map((k) => ({
     value: k.id,
-    label: `${k.exchange} — ${k.label || 'без названия'}`,
+    label: `${displayExchange(k.exchange)} — ${k.label || 'без названия'}`,
   }))
 
   async function extractErrorMessage(error) {
@@ -60,40 +58,61 @@ function Trades() {
     try {
       const body = await error.context.json()
       if (body?.error) message = body.error
-    } catch {
-      // не удалось распарсить тело — используем error.message как есть
-    }
+    } catch {}
     return message
+  }
+
+  async function invokeFetch(body) {
+    const { data, error } = await supabase.functions.invoke('fetch-trades', { body })
+    if (error) throw new Error(await extractErrorMessage(error))
+    if (!data?.ok) throw new Error(data?.error || 'Не удалось синхронизировать сделки')
+    return data
   }
 
   async function handleSync() {
     if (!selectedKeyId) return
     setSyncing(true)
     setError(null)
+    setPendingExport(null)
 
-    const body = { keyId: selectedKeyId }
-    const currentKey = keys.find((k) => k.id === selectedKeyId)
+    try {
+      const result = await invokeFetch({
+        keyId: selectedKeyId,
+        daysBack: Number(daysBack),
+        action: 'sync',
+      })
 
-    if (NEEDS_SYMBOL.includes(currentKey?.exchange)) {
-      if (!symbol) {
-        setSyncing(false)
+      if (result.pending && result.downloadId) {
+        setPendingExport(result.downloadId)
+        await pollExport(result.downloadId)
+      } else {
+        await loadTrades()
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function pollExport(downloadId) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5000))
+
+      const result = await invokeFetch({
+        keyId: selectedKeyId,
+        action: 'poll-export',
+        downloadId,
+      })
+
+      if (!result.pending) {
+        setPendingExport(null)
+        await loadTrades()
         return
       }
-      body.symbol = symbol.toUpperCase()
-    } else {
-      body.daysBack = parseInt(daysBack, 10)
     }
 
-    const { data, error } = await supabase.functions.invoke('fetch-trades', { body })
-
-    if (error) {
-      setError(await extractErrorMessage(error))
-    } else if (!data.ok) {
-      setError(data.error)
-    } else {
-      loadTrades()
-    }
-    setSyncing(false)
+    throw new Error('Binance ещё готовит архив истории. Нажми «Обновить сделки» ещё раз через несколько минут.')
   }
 
   return (
@@ -106,34 +125,14 @@ function Trades() {
         {keys.length > 0 && (
           <>
             <CustomSelect options={keyOptions} value={selectedKeyId} onChange={setSelectedKeyId} />
-
-            {needsSymbol && (
-              <input
-                placeholder="Символ пары, например BTCUSDT"
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-              />
-            )}
-
-            {!needsSymbol && (
-              <CustomSelect options={DEPTH_OPTIONS} value={daysBack} onChange={setDaysBack} />
-            )}
-
-            <button onClick={handleSync} disabled={syncing || (needsSymbol && !symbol)}>
+            <CustomSelect options={DEPTH_OPTIONS} value={daysBack} onChange={setDaysBack} />
+            <button onClick={handleSync} disabled={syncing}>
               {syncing ? 'Синхронизация...' : 'Обновить сделки'}
             </button>
-
-            {needsSymbol && (
-              <p style={{ fontSize: 13, marginTop: 6 }}>
-                У Binance нет способа получить сделки сразу по всем парам — нужно указывать конкретную.
-              </p>
-            )}
-            {!needsSymbol && (
-              <p style={{ fontSize: 13, marginTop: 6 }}>
-                Bybit отдаёт историю окнами по 7 дней — чем больше период, тем дольше идёт синхронизация.
-              </p>
-            )}
-
+            {pendingExport && <p style={{ fontSize: 13, marginTop: 6 }}>Binance готовит исторический архив сделок. Это может занять несколько минут...</p>}
+            <p style={{ fontSize: 13, marginTop: 6 }}>
+              Binance Futures автоматически определит торговые пары. Вводить BTCUSDT, ETHUSDT и другие пары вручную больше не нужно.
+            </p>
             {error && <p className="error">{error}</p>}
           </>
         )}
@@ -147,7 +146,7 @@ function Trades() {
             <thead>
               <tr>
                 <th>Время</th>
-                <th>Биржа</th>
+                <th>Источник</th>
                 <th>Пара</th>
                 <th>Сторона</th>
                 <th>Цена</th>
@@ -160,7 +159,7 @@ function Trades() {
               {trades.map((t) => (
                 <tr key={t.id}>
                   <td>{new Date(t.trade_time).toLocaleString()}</td>
-                  <td>{t.exchange}</td>
+                  <td>{displayExchange(t.exchange)}</td>
                   <td>{t.symbol}</td>
                   <td>{t.side}</td>
                   <td>{t.price}</td>
