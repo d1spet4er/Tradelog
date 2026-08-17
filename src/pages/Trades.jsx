@@ -4,10 +4,20 @@ import CustomSelect from '../components/ui/CustomSelect'
 
 const NEEDS_SYMBOL = ['binance']
 
+const DEPTH_OPTIONS = [
+  { value: '7', label: 'Последние 7 дней' },
+  { value: '30', label: 'Последние 30 дней' },
+  { value: '90', label: 'Последние 90 дней' },
+  { value: '180', label: 'Последние 180 дней' },
+  { value: '365', label: 'Последний год' },
+  { value: '700', label: 'Последние ~2 года' },
+]
+
 function Trades() {
   const [keys, setKeys] = useState([])
   const [selectedKeyId, setSelectedKeyId] = useState('')
   const [symbol, setSymbol] = useState('')
+  const [daysBack, setDaysBack] = useState('90')
   const [trades, setTrades] = useState([])
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState(null)
@@ -63,12 +73,15 @@ function Trades() {
 
     const body = { keyId: selectedKeyId }
     const currentKey = keys.find((k) => k.id === selectedKeyId)
+
     if (NEEDS_SYMBOL.includes(currentKey?.exchange)) {
       if (!symbol) {
         setSyncing(false)
         return
       }
       body.symbol = symbol.toUpperCase()
+    } else {
+      body.daysBack = parseInt(daysBack, 10)
     }
 
     const { data, error } = await supabase.functions.invoke('fetch-trades', { body })
@@ -83,14 +96,6 @@ function Trades() {
     setSyncing(false)
   }
 
-  // Для бирж без обязательного символа (Bybit) — синхронизируем автоматически при выборе ключа
-  useEffect(() => {
-    if (selectedKey && !NEEDS_SYMBOL.includes(selectedKey.exchange)) {
-      handleSync()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKeyId])
-
   return (
     <div>
       <h1>Сделки</h1>
@@ -103,26 +108,30 @@ function Trades() {
             <CustomSelect options={keyOptions} value={selectedKeyId} onChange={setSelectedKeyId} />
 
             {needsSymbol && (
-              <>
-                <input
-                  placeholder="Символ пары, например BTCUSDT"
-                  value={symbol}
-                  onChange={(e) => setSymbol(e.target.value)}
-                />
-                <button onClick={handleSync} disabled={syncing || !symbol}>
-                  {syncing ? 'Синхронизация...' : 'Загрузить сделки'}
-                </button>
-                <p style={{ fontSize: 13, marginTop: 6 }}>
-                  У Binance нет способа получить сделки сразу по всем парам — нужно указывать конкретную,
-                  поэтому здесь синхронизация ручная.
-                </p>
-              </>
+              <input
+                placeholder="Символ пары, например BTCUSDT"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+              />
             )}
 
             {!needsSymbol && (
-              <button onClick={handleSync} disabled={syncing} style={{ marginLeft: 8 }}>
-                {syncing ? 'Синхронизация...' : 'Обновить'}
-              </button>
+              <CustomSelect options={DEPTH_OPTIONS} value={daysBack} onChange={setDaysBack} />
+            )}
+
+            <button onClick={handleSync} disabled={syncing || (needsSymbol && !symbol)}>
+              {syncing ? 'Синхронизация...' : 'Обновить сделки'}
+            </button>
+
+            {needsSymbol && (
+              <p style={{ fontSize: 13, marginTop: 6 }}>
+                У Binance нет способа получить сделки сразу по всем парам — нужно указывать конкретную.
+              </p>
+            )}
+            {!needsSymbol && (
+              <p style={{ fontSize: 13, marginTop: 6 }}>
+                Bybit отдаёт историю окнами по 7 дней — чем больше период, тем дольше идёт синхронизация.
+              </p>
             )}
 
             {error && <p className="error">{error}</p>}

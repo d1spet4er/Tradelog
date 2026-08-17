@@ -53,10 +53,40 @@ async function fetchBinanceTrades(
   }));
 }
 
-async function fetchBybitTrades(apiKey: string, apiSecret: string): Promise<NormalizedTrade[]> {
+const BYBIT_CATEGORIES = ["spot", "linear", "inverse"] as const;
+const MS_PER_DAY = 86400000;
+const BYBIT_CHUNK_DAYS = 7;
+const CONCURRENCY_LIMIT = 5;
+const BATCH_DELAY_MS = 350;
+
+function buildTimeChunks(daysBack: number): Array<{ start: number; end: number }> {
+  const chunks: Array<{ start: number; end: number }> = [];
+  let end = Date.now();
+  let remaining = daysBack;
+
+  while (remaining > 0) {
+    const size = Math.min(BYBIT_CHUNK_DAYS, remaining);
+    const start = end - size * MS_PER_DAY;
+    chunks.push({ start, end });
+    end = start;
+    remaining -= size;
+  }
+
+  return chunks;
+}
+
+type ChunkResult = { trades: NormalizedTrade[]; error?: string };
+
+async function fetchBybitChunk(
+  apiKey: string,
+  apiSecret: string,
+  category: string,
+  start: number,
+  end: number
+): Promise<ChunkResult> {
   const timestamp = Date.now().toString();
   const recvWindow = "5000";
-  const query = "category=spot&limit=50";
+  const query = `category=${category}&limit=100&startTime=${start}&endTime=${end}`;
 
   const payload = timestamp + apiKey + recvWindow + query;
   const signature = createHmac("sha256", apiSecret).update(payload).digest("hex");
@@ -73,10 +103,10 @@ async function fetchBybitTrades(apiKey: string, apiSecret: string): Promise<Norm
   const data = await res.json();
 
   if (data.retCode !== 0) {
-    throw new Error(data.retMsg || "Ошибка Bybit API");
+    return { trades: [], error: data.retMsg || `Bybit retCode ${data.retCode}` };
   }
 
-  return (data.result?.list || []).map((t: any) => ({
+  const trades = (data.result?.list || []).map((t: any) => ({
     exchange: "bybit",
     symbol: t.symbol,
     exchange_trade_id: t.execId,
@@ -89,6 +119,47 @@ async function fetchBybitTrades(apiKey: string, apiSecret: string): Promise<Norm
     commission_asset: t.feeCurrency || null,
     trade_time: new Date(Number(t.execTime)).toISOString(),
   }));
+
+  return { trades };
+}
+
+// Запускает задачи ограниченными пачками вместо всех сразу — иначе биржа режет по rate limit
+async function runLimited<T>(
+  tasks: Array<() => Promise<T>>,
+  limit: number,
+  delayMs: number
+): Promise<T[]> {
+  const results: T[] = [];
+  for (let i = 0; i < tasks.length; i += limit) {
+    const batch = tasks.slice(i, i + limit);
+    const batchResults = await Promise.all(batch.map((fn) => fn()));
+    results.push(...batchResults);
+    if (i + limit < tasks.length) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return results;
+}
+
+async function fetchBybitTrades(
+  apiKey: string,
+  apiSecret: string,
+  daysBack: number
+): Promise<{ trades: NormalizedTrade[]; errors: string[] }> {
+  const chunks = buildTimeChunks(daysBack);
+  const tasks: Array<() => Promise<ChunkResult>> = [];
+
+  for (const category of BYBIT_CATEGORIES) {
+    for (const chunk of chunks) {
+      tasks.push(() => fetchBybitChunk(apiKey, apiSecret, category, chunk.start, chunk.end));
+    }
+  }
+
+  const results = await runLimited(tasks, CONCURRENCY_LIMIT, BATCH_DELAY_MS);
+  const trades = results.flatMap((r) => r.trades);
+  const errors = [...new Set(results.filter((r) => r.error).map((r) => r.error as string))];
+
+  return { trades, errors };
 }
 
 Deno.serve(async (req) => {
@@ -105,7 +176,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { keyId, symbol } = await req.json();
+    const { keyId, symbol, daysBack } = await req.json();
     if (!keyId) {
       return new Response(
         JSON.stringify({ ok: false, error: "keyId обязателен" }),
@@ -127,7 +198,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    // RLS ограничит доступ только записями этого юзера
     const { data: keyRecord, error: fetchError } = await userClient
       .from("exchange_keys")
       .select("exchange, api_key, api_secret")
@@ -155,7 +225,17 @@ Deno.serve(async (req) => {
       }
       trades = await fetchBinanceTrades(apiKey, apiSecret, symbol);
     } else if (keyRecord.exchange === "bybit") {
-      trades = await fetchBybitTrades(apiKey, apiSecret);
+      const depth = Math.min(Math.max(daysBack || 30, 1), 700);
+      const result = await fetchBybitTrades(apiKey, apiSecret, depth);
+
+      if (result.trades.length === 0 && result.errors.length > 0) {
+        return new Response(
+          JSON.stringify({ ok: false, error: result.errors.join("; ") }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      trades = result.trades;
     } else {
       return new Response(
         JSON.stringify({ ok: false, error: `Загрузка сделок для ${keyRecord.exchange} пока не поддерживается` }),
@@ -168,6 +248,13 @@ Deno.serve(async (req) => {
       exchange_key_id: keyId,
       ...t,
     }));
+
+    if (rows.length === 0) {
+      return new Response(
+        JSON.stringify({ ok: true, count: 0 }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     const adminClient = createClient(
       Deno.env.get("SUPABASE_URL")!,

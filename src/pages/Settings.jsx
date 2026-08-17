@@ -13,7 +13,6 @@ const EXCHANGE_OPTIONS = [
   { value: 'bitget', label: 'Bitget' },
   { value: 'gate', label: 'Gate' },
   { value: 'kucoin', label: 'KuCoin' },
-  { value: 'asterdex', label: 'AsterDEX' },
 ]
 
 const EXCHANGE_META = {
@@ -24,7 +23,6 @@ const EXCHANGE_META = {
   bitget: { letter: 'B', color: '#1DA2B4' },
   gate: { letter: 'G', color: '#2354E6' },
   kucoin: { letter: 'K', color: '#24AE8F' },
-  asterdex: { letter: 'A', color: '#7C5CFF' },
 }
 
 function ExchangeBadge({ exchange }) {
@@ -96,7 +94,6 @@ function Settings() {
       setApiPassphrase('')
       loadKeys()
     }
-
     setLoading(false)
   }
 
@@ -107,7 +104,6 @@ function Settings() {
 
   async function handleCheck(id) {
     setChecking(id)
-
     const { data, error } = await supabase.functions.invoke('exchange-check', {
       body: { keyId: id },
     })
@@ -122,7 +118,6 @@ function Settings() {
       setCheckStatus((s) => ({ ...s, [id]: 'fail' }))
       alert('Ошибка проверки: ' + data.error)
     }
-
     setChecking(null)
   }
 
