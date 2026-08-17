@@ -6,7 +6,8 @@ import './Settings.css'
 const NEEDS_PASSPHRASE = ['okx', 'kucoin', 'bitget']
 
 const EXCHANGE_OPTIONS = [
-  { value: 'binance', label: 'Binance' },
+  { value: 'binance', label: 'Binance Futures' },
+  { value: 'tiger-binance', label: 'Tiger Trade — Binance Futures' },
   { value: 'bybit', label: 'Bybit' },
   { value: 'okx', label: 'OKX' },
   { value: 'mexc', label: 'MEXC' },
@@ -17,6 +18,7 @@ const EXCHANGE_OPTIONS = [
 
 const EXCHANGE_META = {
   binance: { letter: 'B', color: '#F3BA2F' },
+  'tiger-binance': { letter: 'T', color: '#FF6B35' },
   bybit: { letter: 'B', color: '#FF6B35' },
   okx: { letter: 'O', color: '#E7E7E7' },
   mexc: { letter: 'M', color: '#00C08B' },
@@ -27,11 +29,7 @@ const EXCHANGE_META = {
 
 function ExchangeBadge({ exchange }) {
   const meta = EXCHANGE_META[exchange] || { letter: '?', color: '#8A8F98' }
-  return (
-    <span className="exchange-badge" style={{ background: meta.color }}>
-      {meta.letter}
-    </span>
-  )
+  return <span className="exchange-badge" style={{ background: meta.color }}>{meta.letter}</span>
 }
 
 function Settings() {
@@ -44,30 +42,22 @@ function Settings() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [checking, setChecking] = useState(null)
-  const [checkStatus, setCheckStatus] = useState({}) // { [keyId]: 'ok' | 'fail' }
+  const [checkStatus, setCheckStatus] = useState({})
 
   async function loadKeys() {
-    const { data, error } = await supabase
-      .from('exchange_keys')
-      .select('id, exchange, label, created_at')
-      .order('created_at', { ascending: false })
-
+    const { data, error } = await supabase.from('exchange_keys').select('id, exchange, label, created_at').order('created_at', { ascending: false })
     if (error) setError(error.message)
     else setKeys(data)
   }
 
-  useEffect(() => {
-    loadKeys()
-  }, [])
+  useEffect(() => { loadKeys() }, [])
 
   async function extractErrorMessage(error) {
     let message = error.message
     try {
       const body = await error.context.json()
       if (body?.error) message = body.error
-    } catch {
-      // не удалось распарсить тело — используем error.message как есть
-    }
+    } catch {}
     return message
   }
 
@@ -75,19 +65,13 @@ function Settings() {
     e.preventDefault()
     setLoading(true)
     setError(null)
-
     const body = { exchange, label, apiKey, apiSecret }
-    if (NEEDS_PASSPHRASE.includes(exchange)) {
-      body.apiPassphrase = apiPassphrase
-    }
+    if (NEEDS_PASSPHRASE.includes(exchange)) body.apiPassphrase = apiPassphrase
 
     const { data, error } = await supabase.functions.invoke('save-exchange-key', { body })
-
-    if (error) {
-      setError(await extractErrorMessage(error))
-    } else if (!data.ok) {
-      setError(data.error)
-    } else {
+    if (error) setError(await extractErrorMessage(error))
+    else if (!data.ok) setError(data.error)
+    else {
       setLabel('')
       setApiKey('')
       setApiSecret('')
@@ -104,10 +88,7 @@ function Settings() {
 
   async function handleCheck(id) {
     setChecking(id)
-    const { data, error } = await supabase.functions.invoke('exchange-check', {
-      body: { keyId: id },
-    })
-
+    const { data, error } = await supabase.functions.invoke('exchange-check', { body: { keyId: id } })
     if (error) {
       setCheckStatus((s) => ({ ...s, [id]: 'fail' }))
       alert('Ошибка проверки: ' + (await extractErrorMessage(error)))
@@ -124,7 +105,6 @@ function Settings() {
   return (
     <div>
       <h1>Настройки</h1>
-
       <section>
         <h2>Подключённые биржи</h2>
         {keys.length === 0 && <p>Ключей пока нет</p>}
@@ -134,16 +114,14 @@ function Settings() {
               <div className="key-card__info">
                 <ExchangeBadge exchange={k.exchange} />
                 <div>
-                  <p className="key-card__exchange">{k.exchange}</p>
+                  <p className="key-card__exchange">{k.exchange === 'tiger-binance' ? 'Tiger Trade — Binance Futures' : k.exchange}</p>
                   <p className="key-card__label">{k.label || 'без названия'}</p>
                 </div>
                 {checkStatus[k.id] === 'ok' && <span className="status-chip status-chip--ok">рабочий</span>}
                 {checkStatus[k.id] === 'fail' && <span className="status-chip status-chip--fail">ошибка</span>}
               </div>
               <div className="key-card__actions">
-                <button onClick={() => handleCheck(k.id)} disabled={checking === k.id}>
-                  {checking === k.id ? 'Проверка...' : 'Проверить'}
-                </button>
+                <button onClick={() => handleCheck(k.id)} disabled={checking === k.id}>{checking === k.id ? 'Проверка...' : 'Проверить'}</button>
                 <button onClick={() => handleDelete(k.id)}>Удалить</button>
               </div>
             </div>
@@ -157,36 +135,12 @@ function Settings() {
           <p>Используй только read-only ключи, без прав на вывод средств.</p>
           <form className="key-form" onSubmit={handleSubmit}>
             <CustomSelect options={EXCHANGE_OPTIONS} value={exchange} onChange={setExchange} />
-            <input
-              placeholder="Название (опционально)"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-            />
-            <input
-              placeholder="API Key"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              required
-            />
-            <input
-              placeholder="API Secret"
-              value={apiSecret}
-              onChange={(e) => setApiSecret(e.target.value)}
-              required
-            />
-            {NEEDS_PASSPHRASE.includes(exchange) && (
-              <input
-                className="key-form__full"
-                placeholder="Passphrase"
-                value={apiPassphrase}
-                onChange={(e) => setApiPassphrase(e.target.value)}
-                required
-              />
-            )}
+            <input placeholder="Название (опционально)" value={label} onChange={(e) => setLabel(e.target.value)} />
+            <input placeholder="API Key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} required />
+            <input placeholder="API Secret" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} required />
+            {NEEDS_PASSPHRASE.includes(exchange) && <input className="key-form__full" placeholder="Passphrase" value={apiPassphrase} onChange={(e) => setApiPassphrase(e.target.value)} required />}
             {error && <p className="error key-form__full">{error}</p>}
-            <button className="key-form__full" type="submit" disabled={loading}>
-              {loading ? 'Сохранение...' : 'Сохранить'}
-            </button>
+            <button className="key-form__full" type="submit" disabled={loading}>{loading ? 'Сохранение...' : 'Сохранить'}</button>
           </form>
         </div>
       </section>
