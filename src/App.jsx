@@ -3,18 +3,15 @@ import { ThemeProvider } from './context/ThemeContext'
 import Layout from './components/layout/Layout'
 import Login from './pages/Login'
 import Callback from './pages/Callback'
-import { useEffect } from 'react'
 
 function AppContent() {
   const { session, loading } = useAuth()
   
+  // Правильный путь - /auth/callback
   const isCallback = window.location.pathname === '/auth/callback'
   
-  console.log('=== AppContent ===')
+  console.log('Pathname:', window.location.pathname)
   console.log('isCallback:', isCallback)
-  console.log('session:', session)
-  console.log('loading:', loading)
-  console.log('pathname:', window.location.pathname)
   
   if (loading) return <p>Загрузка...</p>
   if (isCallback) return <Callback />

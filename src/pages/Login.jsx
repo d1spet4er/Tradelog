@@ -51,7 +51,12 @@ function Login() {
   }
 
   const handleOAuth = (provider) => {
-    const redirectUrl = window.location.origin + '/auth/callback'
+    // Правильные пути
+    const redirectUrl = window.location.hostname === 'localhost'
+      ? 'http://localhost:5173/auth/callback'
+      : 'https://tradelog-bronny.vercel.app/auth/callback'
+    
+    console.log('Redirecting to:', redirectUrl)
     
     supabase.auth.signInWithOAuth({
       provider,
