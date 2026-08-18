@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { aggregateTrades } from '../utils/tradeAggregation'
 import './Dashboard.css'
 
 function StatCard({ label, value, sub }) {
@@ -35,7 +36,7 @@ function buildLastNDays(trades, n) {
   const today = new Date()
   const days = []
 
-  for (let i = n - 1; i >= 0; i--) {
+  for (let i = n - 1; i >= 0; i -= 1) {
     const d = new Date(today)
     d.setDate(d.getDate() - i)
     const key = d.toISOString().slice(0, 10)
@@ -47,15 +48,22 @@ function buildLastNDays(trades, n) {
   }
 
   trades.forEach((t) => {
-    const key = t.trade_time.slice(0, 10)
+    const key = String(t.entryTime || '').slice(0, 10)
     if (key in counts) counts[key] += 1
   })
 
   return days.map((d) => ({ ...d, count: counts[d.date] }))
 }
 
+function formatMoney(value, digits = 2) {
+  return `$${Number(value || 0).toLocaleString('ru-RU', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })}`
+}
+
 function Dashboard() {
-  const [trades, setTrades] = useState([])
+  const [fills, setFills] = useState([])
   const [keys, setKeys] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -65,7 +73,7 @@ function Dashboard() {
         supabase.from('trades').select('*').order('trade_time', { ascending: false }),
         supabase.from('exchange_keys').select('id, exchange'),
       ])
-      setTrades(tradesData || [])
+      setFills(tradesData || [])
       setKeys(keysData || [])
       setLoading(false)
     }
@@ -74,9 +82,18 @@ function Dashboard() {
 
   if (loading) return <p>Загрузка...</p>
 
+  // The database contains raw exchange executions (fills).
+  // Dashboard statistics must use the same aggregation as the Trades page,
+  // so one position is counted as one trade instead of counting every fill.
+  const trades = aggregateTrades(fills)
   const totalTrades = trades.length
-  const totalVolume = trades.reduce((sum, t) => sum + (parseFloat(t.quote_qty) || 0), 0)
-  const totalCommission = trades.reduce((sum, t) => sum + (parseFloat(t.commission) || 0), 0)
+  const totalExecutions = fills.length
+  const totalVolume = fills.reduce((sum, t) => sum + (parseFloat(t.quote_qty) || 0), 0)
+  const totalCommission = fills.reduce((sum, t) => sum + (parseFloat(t.commission) || 0), 0)
+  const closedTrades = trades.filter((t) => t.closed)
+  const totalPnl = closedTrades.reduce((sum, t) => sum + (Number(t.pnl) || 0), 0)
+  const winningTrades = closedTrades.filter((t) => (Number(t.pnl) || 0) > 0).length
+  const winRate = closedTrades.length ? (winningTrades / closedTrades.length) * 100 : 0
 
   const exchangeCounts = {}
   trades.forEach((t) => {
@@ -94,16 +111,42 @@ function Dashboard() {
       <h1>Дашборд</h1>
 
       <section className="bento">
-        <StatCard label="Всего сделок" value={totalTrades} />
+        <StatCard
+          label="Всего сделок"
+          value={totalTrades}
+          sub={`${totalExecutions.toLocaleString('ru-RU')} исполнений`}
+        />
         <StatCard
           label="Общий объём"
-          value={`$${totalVolume.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}`}
+          value={formatMoney(totalVolume)}
+          sub="оборот по исполнениям"
         />
         <StatCard label="Подключено бирж" value={keys.length} />
         <StatCard
           label="Комиссии всего"
-          value={`$${totalCommission.toLocaleString('ru-RU', { maximumFractionDigits: 4 })}`}
+          value={formatMoney(totalCommission, 4)}
+          sub={closedTrades.length ? `Win rate ${winRate.toFixed(1)}%` : 'Нет закрытых сделок'}
         />
+      </section>
+
+      <section className="dash-card">
+        <h2>Результат</h2>
+        <div className="dashboard-result">
+          <div>
+            <span>Net PnL</span>
+            <strong className={totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+              {totalPnl >= 0 ? '+' : ''}{formatMoney(totalPnl)}
+            </strong>
+          </div>
+          <div>
+            <span>Закрыто сделок</span>
+            <strong>{closedTrades.length}</strong>
+          </div>
+          <div>
+            <span>Открыто</span>
+            <strong>{trades.filter((t) => !t.closed).length}</strong>
+          </div>
+        </div>
       </section>
 
       <section className="dash-card">
@@ -142,20 +185,24 @@ function Dashboard() {
                 <th>Время</th>
                 <th>Биржа</th>
                 <th>Пара</th>
-                <th>Сторона</th>
-                <th>Цена</th>
-                <th>Сумма</th>
+                <th>Направление</th>
+                <th>Вход</th>
+                <th>Выход</th>
+                <th>PnL</th>
               </tr>
             </thead>
             <tbody>
               {recentTrades.map((t) => (
                 <tr key={t.id}>
-                  <td>{new Date(t.trade_time).toLocaleString()}</td>
+                  <td>{new Date(t.entryTime).toLocaleString()}</td>
                   <td>{t.exchange}</td>
                   <td>{t.symbol}</td>
-                  <td>{t.side}</td>
-                  <td>{t.price}</td>
-                  <td>{t.quote_qty}</td>
+                  <td>{t.direction === 'long' ? 'LONG' : 'SHORT'}</td>
+                  <td>{t.entryPrice ?? '—'}</td>
+                  <td>{t.exitPrice ?? '—'}</td>
+                  <td className={t.pnl == null ? '' : t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+                    {t.pnl == null ? '—' : `${t.pnl >= 0 ? '+' : ''}${formatMoney(t.pnl)}`}
+                  </td>
                 </tr>
               ))}
             </tbody>
