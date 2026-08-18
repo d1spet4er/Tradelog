@@ -108,48 +108,150 @@ function parseCsvLine(line: string): string[] {
   return result;
 }
 
-function parseCsv(text: string): Record<string, string>[] {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim().length > 0);
-  if (lines.length < 2) return [];
+function parseCsv(
+  text: string
+): Record<string, string>[] {
+  const clean = text
+    .replace(/^\uFEFF/, "")
+    .trim();
 
-  const headers = parseCsvLine(lines[0]).map((h) => h.trim());
+  if (!clean) {
+    return [];
+  }
+
+  const lines = clean
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+
+  if (lines.length < 2) {
+    return [];
+  }
+
+  // Определяем разделитель по первой строке.
+  const firstLine = lines[0];
+
+  let delimiter = ",";
+
+  if (
+    firstLine.includes(";") &&
+    !firstLine.includes(",")
+  ) {
+    delimiter = ";";
+  } else if (
+    firstLine.includes("\t") &&
+    !firstLine.includes(",")
+  ) {
+    delimiter = "\t";
+  }
+
+  function parseLine(
+    line: string
+  ): string[] {
+    if (delimiter === ",") {
+      return parseCsvLine(line);
+    }
+
+    const result: string[] = [];
+    let current = "";
+    let quoted = false;
+
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+
+      if (ch === '"') {
+        if (
+          quoted &&
+          line[i + 1] === '"'
+        ) {
+          current += '"';
+          i += 1;
+        } else {
+          quoted = !quoted;
+        }
+      } else if (
+        ch === delimiter &&
+        !quoted
+      ) {
+        result.push(current);
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+
+    result.push(current);
+
+    return result;
+  }
+
+  const headers = parseLine(lines[0])
+    .map((header) => header.trim());
+
   return lines.slice(1).map((line) => {
-    const values = parseCsvLine(line);
+    const values = parseLine(line);
+
     const row: Record<string, string> = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
-    });
+
+    headers.forEach(
+      (header, index) => {
+        row[header] =
+          values[index] ?? "";
+      }
+    );
+
     return row;
   });
+}
+
+function normalizeHeader(value: string): string {
+  return value
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function parseExportTime(value: string): number {
+  const raw = value.trim();
+
+  const numeric = Number(raw);
+
+  if (Number.isFinite(numeric)) {
+    // Binance timestamps are normally milliseconds.
+    // If seconds accidentally arrive, convert them.
+    return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+  }
+
+  // Binance exports often contain UTC datetime strings
+  // like: 2026-01-07 12:34:56
+  const normalized = raw.includes("T")
+    ? raw
+    : raw.replace(" ", "T");
+
+  const withTimezone =
+    /z$/i.test(normalized) || /[+-]\d\d:\d\d$/.test(normalized)
+      ? normalized
+      : `${normalized}Z`;
+
+  return Date.parse(withTimezone);
 }
 
 function normalizeExportRow(
   row: Record<string, string>,
   exchange: string,
-  index: number
+  fallbackId: string
 ): NormalizedTrade | null {
   const normalizedRow: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(row)) {
-    const normalizedKey = key
-      .replace(/^\uFEFF/, '')
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
-
-    normalizedRow[normalizedKey] = String(value ?? '').trim();
+    normalizedRow[normalizeHeader(key)] = value?.trim?.() ?? "";
   }
 
   const get = (...names: string[]) => {
     for (const name of names) {
-      const key = name
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ');
+      const value = normalizedRow[normalizeHeader(name)];
 
-      const value = normalizedRow[key];
-
-      if (value !== undefined && value !== '') {
+      if (value !== undefined && value !== "") {
         return value;
       }
     }
@@ -158,192 +260,132 @@ function normalizeExportRow(
   };
 
   const symbol = get(
-    'symbol',
-    'pair',
-    'ticker',
-    'market'
+    "symbol",
+    "pair",
+    "ticker",
+    "instrument"
   );
 
   const timeRaw = get(
-    'time',
-    'timestamp',
-    'date',
-    'date(utc)',
-    'datetime',
-    'utc_time',
-    'trade time',
-    'time(utc)'
+    "time",
+    "timestamp",
+    "date",
+    "date(utc)",
+    "datetime",
+    "trade time"
   );
 
-  // Для Binance Futures экспорт может не содержать trade ID.
-  // Поэтому ID делаем необязательным.
   if (!symbol || !timeRaw) {
     return null;
   }
 
-  let time = Number(timeRaw);
-
-  if (!Number.isFinite(time)) {
-    const parsed = Date.parse(timeRaw);
-    time = parsed;
-  }
+  const time = parseExportTime(timeRaw);
 
   if (!Number.isFinite(time)) {
     return null;
   }
 
-  // Если timestamp пришёл в секундах, переводим в миллисекунды.
-  if (time > 0 && time < 100000000000) {
-    time *= 1000;
-  }
+  const rawId = get(
+    "id",
+    "tradeid",
+    "trade id",
+    "trade_id",
+    "execution id",
+    "executionid"
+  );
 
   const sideRaw = get(
-    'side',
-    'type'
+    "side",
+    "direction"
   );
 
   const buyerRaw = get(
-    'buyer',
-    'isbuyer',
-    'is buyer'
-  );
-
-  const orderId = get(
-    'orderid',
-    'order id',
-    'order_id'
+    "buyer",
+    "isbuyer",
+    "is buy"
   );
 
   const priceRaw = get(
-    'price'
+    "price",
+    "execution price"
   );
 
   const qtyRaw = get(
-    'qty',
-    'quantity',
-    'executed',
-    'executed quantity',
-    'executedqty'
+    "qty",
+    "quantity",
+    "size",
+    "executed quantity"
   );
 
   const quoteQtyRaw = get(
-    'quoteqty',
-    'quote quantity',
-    'quote_qty',
-    'quote amount',
-    'amount',
-    'total'
+    "quoteqty",
+    "quote quantity",
+    "amount",
+    "turnover",
+    "value"
   );
 
   const commissionRaw = get(
-    'commission',
-    'fee'
+    "commission",
+    "fee",
+    "trading fee"
   );
 
   const commissionAsset = get(
-    'commissionasset',
-    'commission asset',
-    'fee coin',
-    'fee currency'
+    "commissionasset",
+    "commission asset",
+    "fee asset",
+    "fee currency"
   );
 
-  const tradeIdRaw = get(
-    'id',
-    'tradeid',
-    'trade id',
-    'trade_id',
-    'trade id.'
-  );
+  const side = sideRaw
+    ? sideRaw.toLowerCase()
+    : buyerRaw?.toLowerCase() === "true"
+      ? "buy"
+      : "sell";
 
-  const tradeId =
-    tradeIdRaw ||
-    `${symbol}-${time}-${index}`;
+  const price = priceRaw !== null
+    ? Number(priceRaw.replace(/,/g, ""))
+    : NaN;
 
-  let commission: number | null = null;
+  const qty = qtyRaw !== null
+    ? Number(qtyRaw.replace(/,/g, ""))
+    : NaN;
 
-  if (commissionRaw) {
-    const match = commissionRaw
-      .replace(',', '.')
-      .match(/-?\d+(?:\.\d+)?/);
+  const quoteQty = quoteQtyRaw !== null
+    ? Number(quoteQtyRaw.replace(/,/g, ""))
+    : NaN;
 
-    if (match) {
-      const parsed = Number(match[0]);
-
-      if (Number.isFinite(parsed)) {
-        commission = parsed;
-      }
-    }
-  }
-
-  const parseNumber = (value: string | null): number | null => {
-    if (!value) {
-      return null;
-    }
-
-    const normalized = value
-      .replace(/\s/g, '')
-      .replace(',', '.');
-
-    const parsed = Number(normalized);
-
-    return Number.isFinite(parsed)
-      ? parsed
-      : null;
-  };
-
-  const price = parseNumber(priceRaw);
-  const qty = parseNumber(qtyRaw);
-  const quoteQty = parseNumber(quoteQtyRaw);
-
-  let side: string | null = null;
-
-  if (sideRaw) {
-    const normalizedSide = sideRaw.toLowerCase();
-
-    if (
-      normalizedSide.includes('buy') ||
-      normalizedSide.includes('long')
-    ) {
-      side = 'buy';
-    } else if (
-      normalizedSide.includes('sell') ||
-      normalizedSide.includes('short')
-    ) {
-      side = 'sell';
-    } else {
-      side = normalizedSide;
-    }
-  } else if (buyerRaw) {
-    side = buyerRaw.toLowerCase() === 'true'
-      ? 'buy'
-      : 'sell';
-  }
+  const commission = commissionRaw !== null
+    ? Number(
+        commissionRaw
+          .replace(/,/g, "")
+          .replace(/[^\d.eE+-]/g, "")
+      )
+    : NaN;
 
   return {
     exchange,
-
     symbol: String(symbol).trim(),
-
-    exchange_trade_id: String(tradeId),
-
-    order_id: orderId
-      ? String(orderId)
-      : null,
-
+    exchange_trade_id:
+      rawId && rawId.trim()
+        ? rawId.trim()
+        : fallbackId,
+    order_id: get(
+      "orderid",
+      "order id",
+      "order_id"
+    ),
     side,
-
-    price,
-
-    qty,
-
-    quote_qty: quoteQty,
-
-    commission,
-
-    commission_asset: commissionAsset
-      ? String(commissionAsset)
+    price: Number.isFinite(price) ? price : null,
+    qty: Number.isFinite(qty) ? qty : null,
+    quote_qty: Number.isFinite(quoteQty)
+      ? quoteQty
       : null,
-
+    commission: Number.isFinite(commission)
+      ? commission
+      : null,
+    commission_asset: commissionAsset,
     trade_time: new Date(time).toISOString(),
   };
 }
@@ -364,7 +406,65 @@ async function parseBinanceExport(
     await res.arrayBuffer()
   );
 
+  const allTrades: NormalizedTrade[] = [];
+
+  async function parseText(
+    text: string,
+    sourceName: string
+  ) {
+    const cleanText = text.trim();
+
+    if (!cleanText) {
+      return;
+    }
+
+    // JSON export
+    if (cleanText.startsWith("[")) {
+      const data = JSON.parse(cleanText);
+
+      if (Array.isArray(data)) {
+        data.forEach((trade, index) => {
+          const normalized = normalizeBinanceTrade(
+            trade,
+            exchange
+          );
+
+          if (
+            normalized.symbol &&
+            normalized.exchange_trade_id
+          ) {
+            allTrades.push(normalized);
+          } else {
+            allTrades.push({
+              ...normalized,
+              exchange_trade_id:
+                `${sourceName}:${index}`,
+            });
+          }
+        });
+      }
+
+      return;
+    }
+
+    const rows = parseCsv(cleanText);
+
+    rows.forEach((row, index) => {
+      const normalized = normalizeExportRow(
+        row,
+        exchange,
+        `${sourceName}:${index}`
+      );
+
+      if (normalized) {
+        allTrades.push(normalized);
+      }
+    });
+  }
+
+  // ZIP archive
   if (
+    bytes.length >= 2 &&
     bytes[0] === 0x50 &&
     bytes[1] === 0x4b
   ) {
@@ -372,113 +472,55 @@ async function parseBinanceExport(
 
     const files = Object.values(zip.files)
       .filter((file) => !file.dir)
-      .filter((file) => /\.csv$/i.test(file.name));
+      .filter((file) => {
+        const name = file.name.toLowerCase();
+
+        return (
+          name.endsWith(".csv") ||
+          name.endsWith(".txt") ||
+          name.endsWith(".json")
+        );
+      });
 
     if (files.length === 0) {
       throw new Error(
-        'В архиве Binance не найден CSV-файл с историей сделок'
+        "В архиве Binance не найден CSV/JSON файл с историей сделок"
       );
     }
 
-    const allTrades: NormalizedTrade[] = [];
-
+    // ВАЖНО:
+    // читаем ВСЕ файлы, а не только первый.
     for (const file of files) {
-      const text = await file.async('text');
+      const text = await file.async("text");
 
-      if (!text.trim()) {
-        continue;
-      }
+      await parseText(
+        text,
+        file.name
+      );
+    }
+  } else {
+    const text = new TextDecoder().decode(bytes);
 
-      if (text.trimStart().startsWith('[')) {
-        try {
-          const data = JSON.parse(text);
+    await parseText(
+      text,
+      "binance-export"
+    );
+  }
 
-          if (Array.isArray(data)) {
-            for (const [index, trade] of data.entries()) {
-              allTrades.push(
-                normalizeBinanceTrade(
-                  trade,
-                  exchange
-                )
-              );
-            }
-          }
-        } catch {
-          continue;
-        }
+  // Удаляем дубликаты
+  const seen = new Set<string>();
 
-        continue;
-      }
+  return allTrades.filter((trade) => {
+    const key =
+      `${trade.exchange}:${trade.symbol}:${trade.exchange_trade_id}`;
 
-      const rows = parseCsv(text);
-
-      for (const [index, row] of rows.entries()) {
-        const trade = normalizeExportRow(
-          row,
-          exchange,
-          index
-        );
-
-        if (trade) {
-          allTrades.push(trade);
-        }
-      }
+    if (seen.has(key)) {
+      return false;
     }
 
-    const seen = new Set<string>();
+    seen.add(key);
 
-    return allTrades.filter((trade) => {
-      const key =
-        `${trade.symbol}:${trade.exchange_trade_id}`;
-
-      if (seen.has(key)) {
-        return false;
-      }
-
-      seen.add(key);
-
-      return true;
-    });
-  }
-
-  const text = new TextDecoder().decode(bytes);
-
-  if (text.trimStart().startsWith('[')) {
-    const data = JSON.parse(text);
-
-    return (Array.isArray(data) ? data : [])
-      .map((trade) =>
-        normalizeBinanceTrade(
-          trade,
-          exchange
-        )
-      );
-  }
-
-  return parseCsv(text)
-    .map((row, index) =>
-      normalizeExportRow(
-        row,
-        exchange,
-        index
-      )
-    )
-    .filter(
-      (trade): trade is NormalizedTrade =>
-        Boolean(trade)
-    );
-}
-
-async function startBinanceExport(
-  apiKey: string,
-  apiSecret: string,
-  daysBack: number
-) {
-  const endTime = Date.now();
-  const startTime = endTime - Math.min(daysBack, 365) * 86400000;
-  return await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/trade/asyn", {
-    startTime,
-    endTime,
+    return true;
   });
 }
 

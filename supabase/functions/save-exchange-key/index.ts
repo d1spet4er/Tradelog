@@ -34,7 +34,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { exchange, label, apiKey, apiSecret, apiPassphrase } = await req.json();
+    const { exchange, label, apiKey, apiSecret, apiPassphrase, market } = await req.json();
+
     if (!exchange || !apiKey || !apiSecret) {
       return new Response(
         JSON.stringify({ ok: false, error: "exchange, apiKey и apiSecret обязательны" }),
@@ -58,6 +59,7 @@ Deno.serve(async (req) => {
       api_key: encryptedKey,
       api_secret: encryptedSecret,
       api_passphrase: encryptedPassphrase,
+      market: market || "spot",
     });
 
     if (insertError) {
