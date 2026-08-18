@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import CustomSelect from '../components/ui/CustomSelect'
 import './Trades.css'
@@ -209,8 +209,8 @@ function Trades() {
     const next = { ...current, [field]: value }
     setJournals((prev) => ({ ...prev, [key]: next }))
 
-    window.clearTimeout(updateJournal.timers?.[key])
     updateJournal.timers = updateJournal.timers || {}
+    window.clearTimeout(updateJournal.timers[key])
     updateJournal.timers[key] = window.setTimeout(() => {
       saveJournal(trade, next)
     }, 700)
@@ -283,9 +283,8 @@ function Trades() {
                   const expanded = expandedTradeId === trade.id
 
                   return (
-                    <>
+                    <Fragment key={trade.id}>
                       <tr
-                        key={trade.id}
                         className={`trade-row ${expanded ? 'is-expanded' : ''}`}
                         onClick={() => setExpandedTradeId(expanded ? null : trade.id)}
                       >
@@ -300,7 +299,7 @@ function Trades() {
                       </tr>
 
                       {expanded && (
-                        <tr key={`${trade.id}-details`} className="trade-details-row">
+                        <tr className="trade-details-row">
                           <td colSpan="8">
                             <div className="trade-details">
                               <div className="trade-details-header">
@@ -375,7 +374,7 @@ function Trades() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   )
                 })}
               </tbody>
