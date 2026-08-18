@@ -2,47 +2,72 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 export default function Callback() {
-  const [message, setMessage] = useState('Загрузка...')
+  const [message, setMessage] = useState('Завершаем вход через Google...')
 
   useEffect(() => {
-    const handleCallback = async () => {
+    let active = true
+    let timer
+
+    const finish = async () => {
       try {
-        // Получаем сессию
-        const { data: { session }, error } = await supabase.auth.getSession()
-        
+        // Supabase автоматически обрабатывает OAuth code/hash при загрузке клиента.
+        // Ждём как уже созданную сессию, так и событие SIGNED_IN.
+        const { data, error } = await supabase.auth.getSession()
         if (error) throw error
-        
-        if (session) {
-          // Если есть сессия - перенаправляем на главную
-          setMessage('Успешный вход! Перенаправление...')
-          // Очищаем URL от токенов
+
+        if (data.session) {
           window.history.replaceState(null, '', '/')
-          // Перенаправляем на главную
-          window.location.href = '/'
-        } else {
-          // Если нет сессии - на страницу входа
-          setMessage('Ошибка входа. Перенаправление на страницу входа...')
-          setTimeout(() => {
-            window.location.href = '/login'
-          }, 1500)
+          window.location.replace('/')
+          return
         }
+
+        const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+          if (!active) return
+          if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+            window.history.replaceState(null, '', '/')
+            window.location.replace('/')
+          }
+        })
+
+        timer = window.setTimeout(async () => {
+          const { data: latest } = await supabase.auth.getSession()
+          if (!active) return
+          if (latest.session) {
+            window.history.replaceState(null, '', '/')
+            window.location.replace('/')
+          } else {
+            setMessage('Не удалось получить сессию. Возвращаемся на страницу входа...')
+            window.setTimeout(() => {
+              if (active) window.location.replace('/login')
+            }, 1200)
+          }
+        }, 2500)
+
+        return () => listener.subscription.unsubscribe()
       } catch (error) {
-        console.error('Ошибка:', error)
-        setMessage('Произошла ошибка. Перенаправление на страницу входа...')
-        setTimeout(() => {
-          window.location.href = '/login'
-        }, 1500)
+        console.error('OAuth callback error:', error)
+        if (active) {
+          setMessage('Ошибка авторизации. Возвращаемся на страницу входа...')
+          window.setTimeout(() => {
+            if (active) window.location.replace('/login')
+          }, 1200)
+        }
       }
     }
 
-    handleCallback()
+    finish()
+
+    return () => {
+      active = false
+      if (timer) window.clearTimeout(timer)
+    }
   }, [])
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'center', 
-      alignItems: 'center', 
+    <div style={{
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
       height: '100vh',
       fontSize: '18px',
       fontFamily: 'Arial, sans-serif'
