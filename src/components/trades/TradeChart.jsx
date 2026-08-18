@@ -21,6 +21,8 @@ export default function TradeChart({ trade, roundTrip }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
+  const markerRef = useRef(null)
+  const priceLinesRef = useRef([])
   const [interval, setInterval] = useState('5m')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -35,15 +37,23 @@ export default function TradeChart({ trade, roundTrip }) {
       timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, secondsVisible: false },
     })
     const series = chart.addSeries(CandlestickSeries, { upColor: '#36d98b', downColor: '#ff5d73', borderVisible: false, wickUpColor: '#36d98b', wickDownColor: '#ff5d73' })
-    chartRef.current = chart; seriesRef.current = series
-    return () => { chart.remove(); chartRef.current = null; seriesRef.current = null }
+    chartRef.current = chart
+    seriesRef.current = series
+    return () => {
+      chart.remove()
+      chartRef.current = null
+      seriesRef.current = null
+      markerRef.current = null
+      priceLinesRef.current = []
+    }
   }, [])
 
   useEffect(() => {
     let cancelled = false
     async function loadCandles() {
       if (!seriesRef.current || !trade?.symbol || !trade?.trade_time) return
-      setLoading(true); setError('')
+      setLoading(true)
+      setError('')
       try {
         const entryTime = roundTrip?.entryTime || trade.trade_time
         const exitTime = roundTrip?.exitTime || null
@@ -68,16 +78,27 @@ export default function TradeChart({ trade, roundTrip }) {
         const markers = []
         if (entryCandle) markers.push({ time: entryCandle.time, position: 'belowBar', color: '#36d98b', shape: 'arrowUp', text: 'ENTRY' })
         if (exitCandle) markers.push({ time: exitCandle.time, position: 'aboveBar', color: '#ff5d73', shape: 'arrowDown', text: 'EXIT' })
-        createSeriesMarkers(seriesRef.current, markers)
+        markerRef.current = createSeriesMarkers(seriesRef.current, markers)
+
+        for (const line of priceLinesRef.current) seriesRef.current.removePriceLine(line)
+        priceLinesRef.current = []
+        if (Number.isFinite(Number(roundTrip?.entryPrice))) {
+          priceLinesRef.current.push(seriesRef.current.createPriceLine({ price: Number(roundTrip.entryPrice), color: '#36d98b', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'ENTRY' }))
+        }
+        if (exitCandle && Number.isFinite(Number(roundTrip?.exitPrice))) {
+          priceLinesRef.current.push(seriesRef.current.createPriceLine({ price: Number(roundTrip.exitPrice), color: '#ff5d73', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'EXIT' }))
+        }
 
         const focusTimes = [entryCandle, exitCandle].filter(Boolean).map((item) => item.time)
         const focus = focusTimes.length ? focusTimes[Math.floor(focusTimes.length / 2)] : candles[Math.floor(candles.length / 2)].time
         const focusIndex = Math.max(0, candles.findIndex((c) => c.time === focus))
-        chartRef.current.timeScale().fitContent()
         const padding = interval === '1d' ? 12 : 18
         chartRef.current.timeScale().setVisibleLogicalRange({ from: Math.max(0, focusIndex - padding * 2), to: Math.min(candles.length - 1, focusIndex + padding * 2) })
-      } catch (e) { if (!cancelled) setError(e.message || 'Не удалось загрузить график') }
-      finally { if (!cancelled) setLoading(false) }
+      } catch (e) {
+        if (!cancelled) setError(e.message || 'Не удалось загрузить график')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
     loadCandles()
     return () => { cancelled = true }
@@ -96,7 +117,7 @@ export default function TradeChart({ trade, roundTrip }) {
       <div className="trade-chart-legend">
         <span className="legend-entry">↑ ENTRY</span>
         {roundTrip?.closed && <span className="legend-exit">↓ EXIT</span>}
-        <span>Binance Futures · {roundTrip?.fillCount || 1} исполнений объединены в одну позицию</span>
+        <span>{roundTrip?.fillCount || 1} исполнений → 1 позиция</span>
       </div>
     </div>
   )
