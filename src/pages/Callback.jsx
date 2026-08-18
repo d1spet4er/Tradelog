@@ -2,73 +2,49 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 export default function Callback() {
-  const [message, setMessage] = useState('Завершаем вход через Google...')
+  const [message, setMessage] = useState('Загрузка...')
 
   useEffect(() => {
-    let cancelled = false
-
     const handleCallback = async () => {
       try {
-        const query = new URLSearchParams(window.location.search)
-        const queryError = query.get('error_description') || query.get('error')
-        if (queryError) throw new Error(queryError)
-
-        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
-        const hashError = hash.get('error_description') || hash.get('error')
-        if (hashError) throw new Error(hashError)
-
-        const accessToken = hash.get('access_token')
-        const refreshToken = hash.get('refresh_token')
-
-        // Supabase implicit flow returns the tokens in the URL hash.
-        // Explicitly persist them so the session is available to AuthContext.
-        if (accessToken && refreshToken) {
-          const { data, error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          })
-          if (error) throw error
-          if (!data.session) throw new Error('Supabase не вернул сессию после сохранения OAuth-токенов')
+        const { data: { session }, error } = await supabase.auth.getSession()
+        
+        if (error) throw error
+        
+        if (session) {
+          setMessage('Успешный вход! Перенаправление...')
+          window.history.replaceState(null, '', '/')
+          window.location.href = '/'
         } else {
-          // Fallback for a session that was already persisted by Supabase JS.
-          const { data, error } = await supabase.auth.getSession()
-          if (error) throw error
-          if (!data.session) throw new Error('OAuth-токены не найдены в callback URL и сессия не создана')
+          setMessage('Ошибка входа. Перенаправление...')
+          setTimeout(() => {
+            window.location.href = '/login'
+          }, 1500)
         }
-
-        if (cancelled) return
-        setMessage('Успешный вход! Перенаправление...')
-
-        // Remove OAuth tokens from the address bar before leaving the callback.
-        window.history.replaceState(null, '', '/')
-        window.location.replace('/')
       } catch (error) {
-        if (cancelled) return
-        console.error('OAuth callback error:', error)
-        setMessage(`Не удалось завершить вход: ${error.message || 'неизвестная ошибка'}`)
+        console.error('Ошибка:', error)
+        setMessage('Произошла ошибка...')
+        setTimeout(() => {
+          window.location.href = '/login'
+        }, 1500)
       }
     }
 
     handleCallback()
-    return () => { cancelled = true }
   }, [])
 
   return (
-    <div style={{
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      minHeight: '100vh',
-      padding: '24px',
-      boxSizing: 'border-box',
+    <div style={{ 
+      display: 'flex', 
+      justifyContent: 'center', 
+      alignItems: 'center', 
+      height: '100vh',
       fontSize: '18px',
-      fontFamily: 'Arial, sans-serif',
-      color: 'inherit',
-      textAlign: 'center'
+      fontFamily: 'Arial, sans-serif'
     }}>
-      <div>
+      <div style={{ textAlign: 'center' }}>
         <p>{message}</p>
-        <p>Пожалуйста, подождите...</p>
+        <p style={{ marginTop: '10px', color: '#666' }}>Пожалуйста, подождите...</p>
       </div>
     </div>
   )
