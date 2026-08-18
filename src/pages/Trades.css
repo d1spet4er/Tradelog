@@ -1,298 +1,47 @@
-.trades-page {
-  width: 100%;
-}
-
-.trades-sync,
-.trades-history {
-  margin-bottom: 32px;
-}
-
-.trades-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.trades-toolbar > * {
-  min-width: 180px;
-}
-
-.trades-toolbar button {
-  min-width: 150px;
-}
-
-.sync-hint {
-  font-size: 13px;
-  margin-top: 8px;
-}
-
-.history-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 10px;
-}
-
-.history-heading h2 {
-  margin-bottom: 4px;
-}
-
-.history-heading p {
-  font-size: 13px;
-}
-
-.journal-status {
-  color: var(--up);
-  border: 1px solid color-mix(in srgb, var(--up) 25%, transparent);
-  background: color-mix(in srgb, var(--up) 8%, transparent);
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.trades-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--surface-border);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.trades-table {
-  min-width: 900px;
-  margin-top: 0;
-}
-
-.trade-row {
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.trade-row:hover,
-.trade-row.is-expanded {
-  background: rgba(255, 138, 61, 0.055);
-}
-
-.trade-row td {
-  padding-top: 13px;
-  padding-bottom: 13px;
-}
-
-.trade-symbol {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.side-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-family: var(--font-body);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.side-badge.buy {
-  color: var(--up);
-  background: color-mix(in srgb, var(--up) 12%, transparent);
-}
-
-.side-badge.sell {
-  color: var(--down);
-  background: color-mix(in srgb, var(--down) 12%, transparent);
-}
-
-.trade-details-row > td {
-  padding: 0;
-  border-bottom: 1px solid var(--surface-border);
-}
-
-.trade-details {
-  padding: 24px;
-  background: linear-gradient(135deg, rgba(255, 138, 61, 0.055), rgba(124, 92, 255, 0.035));
-}
-
-.trade-details-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  margin-bottom: 20px;
-}
-
-.details-kicker {
-  display: block;
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-bottom: 5px;
-}
-
-.trade-details h3 {
-  margin: 0;
-  font-size: 22px;
-}
-
-.details-pnl-placeholder {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.trade-metrics {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(130px, 1fr));
-  gap: 10px;
-  margin-bottom: 22px;
-}
-
-.trade-metrics > div {
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--surface-border);
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.12);
-}
-
-.trade-metrics span,
-.journal-field > span,
-.journal-tags > span {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-bottom: 7px;
-}
-
-.trade-metrics strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.journal-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-
-.journal-field {
-  display: block;
-}
-
-.journal-field-wide {
-  grid-column: 1 / -1;
-}
-
-.journal-field textarea {
-  display: block;
-  width: 100%;
-  min-height: 116px;
-  resize: vertical;
-  padding: 13px 14px;
-  border: 1px solid var(--surface-border);
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.18);
-  color: var(--text);
-  font: 400 13px/1.55 var(--font-body);
-  transition: border-color 0.2s ease, background 0.2s ease;
-}
-
-.journal-field-wide textarea {
-  min-height: 145px;
-}
-
-.journal-field textarea::placeholder {
-  color: color-mix(in srgb, var(--text-muted) 75%, transparent);
-}
-
-.journal-field textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: rgba(0, 0, 0, 0.25);
-}
-
-.journal-tags {
-  display: flex;
-  align-items: flex-start;
-  gap: 18px;
-  margin-top: 18px;
-}
-
-.journal-tags > span {
-  margin-top: 8px;
-  min-width: 45px;
-}
-
-.journal-tags > div {
-  display: flex;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.journal-tags .tag {
-  min-width: auto;
-  padding: 6px 10px;
-  border-radius: 999px;
-  color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.035);
-  font-size: 12px;
-}
-
-.journal-tags .tag:hover {
-  transform: none;
-}
-
-.journal-tags .tag.active {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-@media (max-width: 800px) {
-  .trade-details {
-    padding: 18px;
-  }
-
-  .trade-details-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .trade-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .journal-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .journal-field-wide {
-    grid-column: auto;
-  }
-}
-
-@media (max-width: 520px) {
-  .trade-metrics {
-    grid-template-columns: 1fr;
-  }
-
-  .history-heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .journal-tags {
-    flex-direction: column;
-    gap: 8px;
-  }
-}
+.trades-page { width: 100%; }
+.trades-sync, .trades-history { margin-bottom: 32px; }
+.trades-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.trades-toolbar > * { min-width: 180px; }
+.trades-toolbar button { min-width: 150px; }
+.sync-hint { font-size: 13px; margin-top: 8px; }
+.history-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 10px; }
+.history-heading h2 { margin-bottom: 4px; }
+.history-heading p { font-size: 13px; }
+.journal-status { color: var(--up); border: 1px solid color-mix(in srgb, var(--up) 25%, transparent); background: color-mix(in srgb, var(--up) 8%, transparent); padding: 6px 10px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.trades-table-wrap { overflow-x: auto; border: 1px solid var(--surface-border); border-radius: 14px; background: rgba(255,255,255,.02); }
+.trades-table { min-width: 900px; margin-top: 0; }
+.trade-row { cursor: pointer; transition: background .15s ease; }
+.trade-row:hover, .trade-row.is-expanded { background: rgba(255,138,61,.055); }
+.trade-row td { padding-top: 13px; padding-bottom: 13px; }
+.trade-symbol { font-weight: 600; color: var(--text); }
+.side-badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 6px; font-family: var(--font-body); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.side-badge.buy { color: var(--up); background: color-mix(in srgb, var(--up) 12%, transparent); }
+.side-badge.sell { color: var(--down); background: color-mix(in srgb, var(--down) 12%, transparent); }
+.trade-details-row > td { padding: 0; border-bottom: 1px solid var(--surface-border); }
+.trade-details { padding: 24px; background: linear-gradient(135deg, rgba(255,138,61,.055), rgba(124,92,255,.035)); }
+.trade-details-header { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 20px; }
+.details-kicker { display: block; color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 5px; }
+.trade-details h3 { margin: 0; font-size: 22px; }
+.details-pnl { font-family: var(--font-mono); font-size: 18px; font-weight: 700; }
+.details-pnl.positive { color: var(--up); }
+.details-pnl.negative { color: var(--down); }
+.trade-metrics { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; margin-bottom: 22px; }
+.trade-metrics > div { min-width: 0; padding: 12px; border: 1px solid var(--surface-border); border-radius: 10px; background: rgba(0,0,0,.12); }
+.trade-metrics span, .journal-field > span, .journal-tags > span { display: block; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 7px; }
+.trade-metrics strong { display: block; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+.journal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.journal-field { display: block; }
+.journal-field-wide { grid-column: 1 / -1; }
+.journal-field textarea { display: block; width: 100%; min-height: 116px; resize: vertical; padding: 13px 14px; border: 1px solid var(--surface-border); border-radius: 10px; background: rgba(0,0,0,.18); color: var(--text); font: 400 13px/1.55 var(--font-body); transition: border-color .2s ease, background .2s ease; }
+.journal-field-wide textarea { min-height: 145px; }
+.journal-field textarea::placeholder { color: color-mix(in srgb, var(--text-muted) 75%, transparent); }
+.journal-field textarea:focus { outline: none; border-color: var(--accent); background: rgba(0,0,0,.25); }
+.journal-tags { display: flex; align-items: flex-start; gap: 18px; margin-top: 18px; }
+.journal-tags > span { margin-top: 8px; min-width: 45px; }
+.journal-tags > div { display: flex; gap: 7px; flex-wrap: wrap; }
+.journal-tags .tag { min-width: auto; padding: 6px 10px; border-radius: 999px; color: var(--text-muted); background: rgba(255,255,255,.035); font-size: 12px; }
+.journal-tags .tag:hover { transform: none; }
+.journal-tags .tag.active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+@media (max-width: 1100px) { .trade-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 800px) { .trade-details { padding: 18px; } .trade-details-header { align-items: flex-start; flex-direction: column; } .trade-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .journal-grid { grid-template-columns: 1fr; } .journal-field-wide { grid-column: auto; } }
+@media (max-width: 520px) { .trade-metrics { grid-template-columns: 1fr; } .history-heading { align-items: flex-start; flex-direction: column; } .journal-tags { flex-direction: column; gap: 8px; } }
