@@ -1,36 +1,36 @@
-import { useEffect, useState } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
+import { createRoot } from 'react-dom/client'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import Layout from './components/layout/Layout'
 import Login from './pages/Login'
 import Callback from './pages/Callback'
+import './index.css'
 
 function AppContent() {
   const { session, loading } = useAuth()
-  const [isCallback, setIsCallback] = useState(false)
+  const [isCallback, setIsCallback] = useState(() => window.location.pathname === '/auth/callback')
 
   useEffect(() => {
-    // OAuth возвращает пользователя на /auth/callback. Раньше приложение
-    // проверяло только hash с access_token, поэтому PKCE/code callback
-    // фактически попадал обратно на Login.
     setIsCallback(window.location.pathname === '/auth/callback')
   }, [])
 
-  if (loading) return <p>Загрузка...</p>
-
   if (isCallback) return <Callback />
+  if (loading) return <p>Загрузка...</p>
 
   return session ? <Layout /> : <Login />
 }
 
 function App() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
-    </ThemeProvider>
+    <StrictMode>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </ThemeProvider>
+    </StrictMode>
   )
 }
 
-export default App
+createRoot(document.getElementById('root')).render(<App />)
