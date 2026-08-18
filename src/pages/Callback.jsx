@@ -5,62 +5,38 @@ export default function Callback() {
   const [message, setMessage] = useState('Завершаем вход через Google...')
 
   useEffect(() => {
-    let active = true
-    let timer
+    let cancelled = false
 
-    const finish = async () => {
+    const handleCallback = async () => {
       try {
-        // Supabase автоматически обрабатывает OAuth code/hash при загрузке клиента.
-        // Ждём как уже созданную сессию, так и событие SIGNED_IN.
+        const params = new URLSearchParams(window.location.search)
+        const code = params.get('code')
+        const errorDescription = params.get('error_description')
+
+        if (errorDescription) throw new Error(errorDescription)
+
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code)
+          if (error) throw error
+        }
+
         const { data, error } = await supabase.auth.getSession()
         if (error) throw error
+        if (!data.session) throw new Error('Supabase не создал сессию после OAuth')
+        if (cancelled) return
 
-        if (data.session) {
-          window.history.replaceState(null, '', '/')
-          window.location.replace('/')
-          return
-        }
-
-        const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
-          if (!active) return
-          if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
-            window.history.replaceState(null, '', '/')
-            window.location.replace('/')
-          }
-        })
-
-        timer = window.setTimeout(async () => {
-          const { data: latest } = await supabase.auth.getSession()
-          if (!active) return
-          if (latest.session) {
-            window.history.replaceState(null, '', '/')
-            window.location.replace('/')
-          } else {
-            setMessage('Не удалось получить сессию. Возвращаемся на страницу входа...')
-            window.setTimeout(() => {
-              if (active) window.location.replace('/login')
-            }, 1200)
-          }
-        }, 2500)
-
-        return () => listener.subscription.unsubscribe()
+        setMessage('Успешный вход! Перенаправление...')
+        window.history.replaceState(null, '', '/')
+        window.location.replace('/')
       } catch (error) {
+        if (cancelled) return
         console.error('OAuth callback error:', error)
-        if (active) {
-          setMessage('Ошибка авторизации. Возвращаемся на страницу входа...')
-          window.setTimeout(() => {
-            if (active) window.location.replace('/login')
-          }, 1200)
-        }
+        setMessage(`Не удалось завершить вход: ${error.message || 'неизвестная ошибка'}`)
       }
     }
 
-    finish()
-
-    return () => {
-      active = false
-      if (timer) window.clearTimeout(timer)
-    }
+    handleCallback()
+    return () => { cancelled = true }
   }, [])
 
   return (
@@ -68,9 +44,13 @@ export default function Callback() {
       display: 'flex',
       justifyContent: 'center',
       alignItems: 'center',
-      height: '100vh',
+      minHeight: '100vh',
+      padding: '24px',
+      boxSizing: 'border-box',
       fontSize: '18px',
-      fontFamily: 'Arial, sans-serif'
+      fontFamily: 'Arial, sans-serif',
+      color: 'inherit',
+      textAlign: 'center'
     }}>
       <div>
         <p>{message}</p>
