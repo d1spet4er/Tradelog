@@ -10,29 +10,23 @@ export default function Callback() {
     const handleCallback = async () => {
       try {
         const params = new URLSearchParams(window.location.search)
-        const code = params.get('code')
         const errorDescription = params.get('error_description')
+        const errorCode = params.get('error')
 
-        if (errorDescription) throw new Error(errorDescription)
-
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code)
-          if (error) throw error
-        } else if (window.location.hash) {
-          // Supports an OAuth response that arrives as a hash fragment.
-          // Supabase's client will process it when detectSessionInUrl is enabled.
-          const hash = new URLSearchParams(window.location.hash.slice(1))
-          const authError = hash.get('error_description') || hash.get('error')
-          if (authError) throw new Error(authError)
+        if (errorDescription || errorCode) {
+          throw new Error(errorDescription || errorCode)
         }
 
-        // Give the auth client a moment to persist the session after the
-        // callback exchange/URL detection before reading it.
+        // With Supabase implicit flow the tokens arrive in the URL hash.
+        // Supabase JS reads and persists them automatically when
+        // detectSessionInUrl is enabled. Do not call exchangeCodeForSession().
+        const hash = new URLSearchParams(window.location.hash.slice(1))
+        const hashError = hash.get('error_description') || hash.get('error')
+        if (hashError) throw new Error(hashError)
+
         let session = null
-        let lastError = null
-        for (let attempt = 0; attempt < 20; attempt += 1) {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
           const { data, error } = await supabase.auth.getSession()
-          lastError = error
           if (error) throw error
           session = data.session
           if (session) break
@@ -40,7 +34,7 @@ export default function Callback() {
         }
 
         if (!session) {
-          throw new Error(lastError?.message || 'Supabase не создал сессию после OAuth')
+          throw new Error('Supabase не создал сессию после OAuth')
         }
 
         if (cancelled) return
