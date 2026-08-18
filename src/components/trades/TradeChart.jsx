@@ -29,6 +29,7 @@ export default function TradeChart({ trade, roundTrip }) {
 
   useEffect(() => {
     if (!containerRef.current) return undefined
+
     const chart = createChart(containerRef.current, {
       autoSize: true,
       layout: { background: { color: 'transparent' }, textColor: '#8f8f9a', fontFamily: 'Inter, system-ui, sans-serif' },
@@ -36,9 +37,20 @@ export default function TradeChart({ trade, roundTrip }) {
       crosshair: { mode: 1 }, rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
       timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, secondsVisible: false },
     })
-    const series = chart.addSeries(CandlestickSeries, { upColor: '#36d98b', downColor: '#ff5d73', borderVisible: false, wickUpColor: '#36d98b', wickDownColor: '#ff5d73' })
+
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: '#36d98b',
+      downColor: '#ff5d73',
+      borderVisible: false,
+      wickUpColor: '#36d98b',
+      wickDownColor: '#ff5d73',
+      priceLineVisible: false,
+      lastValueVisible: false,
+    })
+
     chartRef.current = chart
     seriesRef.current = series
+
     return () => {
       chart.remove()
       chartRef.current = null
@@ -50,6 +62,7 @@ export default function TradeChart({ trade, roundTrip }) {
 
   useEffect(() => {
     let cancelled = false
+
     async function loadCandles() {
       if (!seriesRef.current || !trade?.symbol || !trade?.trade_time) return
       setLoading(true)
@@ -73,20 +86,38 @@ export default function TradeChart({ trade, roundTrip }) {
           const seconds = Math.floor(new Date(iso).getTime() / 1000)
           return candles.reduce((best, candle) => Math.abs(candle.time - seconds) < Math.abs(best.time - seconds) ? candle : best, candles[0])
         }
+
         const entryCandle = nearest(entryTime)
         const exitCandle = exitTime ? nearest(exitTime) : null
+
         const markers = []
-        if (entryCandle) markers.push({ time: entryCandle.time, position: 'belowBar', color: '#36d98b', shape: 'arrowUp', text: 'ENTRY' })
-        if (exitCandle) markers.push({ time: exitCandle.time, position: 'aboveBar', color: '#ff5d73', shape: 'arrowDown', text: 'EXIT' })
+        if (entryCandle) markers.push({ time: entryCandle.time, position: 'belowBar', color: '#36d98b', shape: 'arrowUp' })
+        if (exitCandle) markers.push({ time: exitCandle.time, position: 'aboveBar', color: '#ff5d73', shape: 'arrowDown' })
         markerRef.current = createSeriesMarkers(seriesRef.current, markers)
 
         for (const line of priceLinesRef.current) seriesRef.current.removePriceLine(line)
         priceLinesRef.current = []
+
         if (Number.isFinite(Number(roundTrip?.entryPrice))) {
-          priceLinesRef.current.push(seriesRef.current.createPriceLine({ price: Number(roundTrip.entryPrice), color: '#36d98b', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'ENTRY' }))
+          priceLinesRef.current.push(seriesRef.current.createPriceLine({
+            price: Number(roundTrip.entryPrice),
+            color: '#36d98b',
+            lineWidth: 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: 'Entry',
+          }))
         }
+
         if (exitCandle && Number.isFinite(Number(roundTrip?.exitPrice))) {
-          priceLinesRef.current.push(seriesRef.current.createPriceLine({ price: Number(roundTrip.exitPrice), color: '#ff5d73', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'EXIT' }))
+          priceLinesRef.current.push(seriesRef.current.createPriceLine({
+            price: Number(roundTrip.exitPrice),
+            color: '#ff5d73',
+            lineWidth: 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: 'Exit',
+          }))
         }
 
         const focusTimes = [entryCandle, exitCandle].filter(Boolean).map((item) => item.time)
@@ -100,6 +131,7 @@ export default function TradeChart({ trade, roundTrip }) {
         if (!cancelled) setLoading(false)
       }
     }
+
     loadCandles()
     return () => { cancelled = true }
   }, [trade, roundTrip, interval])
