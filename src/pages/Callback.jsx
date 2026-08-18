@@ -9,56 +9,39 @@ export default function Callback() {
 
     const handleCallback = async () => {
       try {
-        const params = new URLSearchParams(window.location.search)
-        const queryError = params.get('error_description') || params.get('error')
+        const query = new URLSearchParams(window.location.search)
+        const queryError = query.get('error_description') || query.get('error')
         if (queryError) throw new Error(queryError)
 
-        const hash = new URLSearchParams(window.location.hash.slice(1))
+        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
         const hashError = hash.get('error_description') || hash.get('error')
         if (hashError) throw new Error(hashError)
 
-        // Implicit flow: Supabase JS processes the access/refresh tokens from
-        // the hash when the client is created. Wait for the auth state event
-        // rather than racing getSession() against URL processing.
-        const finish = async () => {
+        const accessToken = hash.get('access_token')
+        const refreshToken = hash.get('refresh_token')
+
+        // Supabase implicit flow returns the tokens in the URL hash.
+        // Explicitly persist them so the session is available to AuthContext.
+        if (accessToken && refreshToken) {
+          const { data, error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          })
+          if (error) throw error
+          if (!data.session) throw new Error('Supabase не вернул сессию после сохранения OAuth-токенов')
+        } else {
+          // Fallback for a session that was already persisted by Supabase JS.
           const { data, error } = await supabase.auth.getSession()
           if (error) throw error
-          if (!data.session) return false
-          if (cancelled) return true
-          setMessage('Успешный вход! Перенаправление...')
-          window.history.replaceState(null, '', '/')
-          window.location.replace('/')
-          return true
+          if (!data.session) throw new Error('OAuth-токены не найдены в callback URL и сессия не создана')
         }
 
-        if (await finish()) return
+        if (cancelled) return
+        setMessage('Успешный вход! Перенаправление...')
 
-        await new Promise((resolve, reject) => {
-          let settled = false
-          let timeoutId
-          const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
-            if (settled) return
-            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
-              if (session) {
-                settled = true
-                clearTimeout(timeoutId)
-                listener.subscription.unsubscribe()
-                if (!cancelled) {
-                  setMessage('Успешный вход! Перенаправление...')
-                  window.history.replaceState(null, '', '/')
-                  window.location.replace('/')
-                }
-                resolve()
-              }
-            }
-          })
-          timeoutId = setTimeout(() => {
-            if (settled) return
-            settled = true
-            listener.subscription.unsubscribe()
-            reject(new Error('Supabase не создал сессию после OAuth'))
-          }, 5000)
-        })
+        // Remove OAuth tokens from the address bar before leaving the callback.
+        window.history.replaceState(null, '', '/')
+        window.location.replace('/')
       } catch (error) {
         if (cancelled) return
         console.error('OAuth callback error:', error)
