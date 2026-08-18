@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import CustomSelect from '../components/ui/CustomSelect'
+import TradeChart from '../components/trades/TradeChart'
 import './Trades.css'
 
 const DEPTH_OPTIONS = [
@@ -30,8 +31,6 @@ function formatDate(value) {
   return new Date(value).toLocaleString('ru-RU')
 }
 
-// Связываем запись дневника со стабильным ID сделки биржи,
-// а не с локальным UUID строки в базе.
 function tradeKey(trade) {
   return `${trade.exchange}:${trade.exchange_trade_id}`
 }
@@ -256,7 +255,7 @@ function Trades() {
         <div className="history-heading">
           <div>
             <h2>История</h2>
-            <p>Нажми на сделку, чтобы открыть подробности и дневник.</p>
+            <p>Нажми на сделку, чтобы открыть график, подробности и дневник.</p>
           </div>
           {journalLoaded && <span className="journal-status">Дневник подключён</span>}
         </div>
@@ -313,6 +312,8 @@ function Trades() {
                                   {savingJournal === trade.id ? 'Сохранение...' : 'Сохраняется автоматически'}
                                 </div>
                               </div>
+
+                              <TradeChart trade={trade} />
 
                               <div className="trade-metrics">
                                 <div><span>Время</span><strong>{formatDate(trade.trade_time)}</strong></div>
