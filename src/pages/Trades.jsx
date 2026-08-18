@@ -30,8 +30,10 @@ function formatDate(value) {
   return new Date(value).toLocaleString('ru-RU')
 }
 
+// Связываем запись дневника со стабильным ID сделки биржи,
+// а не с локальным UUID строки в базе.
 function tradeKey(trade) {
-  return String(trade.id)
+  return `${trade.exchange}:${trade.exchange_trade_id}`
 }
 
 function createEmptyJournal() {
