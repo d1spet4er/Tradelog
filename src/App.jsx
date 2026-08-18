@@ -3,19 +3,21 @@ import { ThemeProvider } from './context/ThemeContext'
 import Layout from './components/layout/Layout'
 import Login from './pages/Login'
 import Callback from './pages/Callback'
+import { useEffect } from 'react'
 
 function AppContent() {
   const { session, loading } = useAuth()
   
-  // Проверяем, находимся ли мы на странице колбэка
   const isCallback = window.location.pathname === '/auth/callback'
   
+  console.log('=== AppContent ===')
+  console.log('isCallback:', isCallback)
+  console.log('session:', session)
+  console.log('loading:', loading)
+  console.log('pathname:', window.location.pathname)
+  
   if (loading) return <p>Загрузка...</p>
-  
-  // Если на странице колбэка - показываем Callback
   if (isCallback) return <Callback />
-  
-  // Иначе показываем либо Layout, либо Login
   return session ? <Layout /> : <Login />
 }
 

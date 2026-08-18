@@ -7,26 +7,49 @@ export default function Callback() {
   useEffect(() => {
     const handleCallback = async () => {
       try {
-        const { data: { session }, error } = await supabase.auth.getSession()
+        // Проверяем, есть ли токен в URL (он приходит после редиректа)
+        const hash = window.location.hash
         
-        if (error) throw error
-        
-        if (session) {
-          setMessage('Успешный вход! Перенаправление...')
-          window.history.replaceState(null, '', '/')
-          window.location.href = '/'
+        if (hash && hash.includes('access_token')) {
+          setMessage('Получен токен. Обработка...')
+          
+          // Получаем сессию
+          const { data: { session }, error } = await supabase.auth.getSession()
+          
+          if (error) {
+            console.error('Ошибка получения сессии:', error)
+            setMessage('Ошибка получения сессии')
+            setTimeout(() => {
+              window.location.href = '/login'
+            }, 2000)
+            return
+          }
+          
+          if (session) {
+            setMessage('Успешный вход! Перенаправление...')
+            // Очищаем URL от токенов
+            window.history.replaceState(null, '', '/')
+            // Перенаправляем на главную
+            window.location.href = '/'
+          } else {
+            setMessage('Сессия не найдена. Перенаправление...')
+            setTimeout(() => {
+              window.location.href = '/login'
+            }, 2000)
+          }
         } else {
-          setMessage('Ошибка входа. Перенаправление...')
+          // Если нет токена в URL - просто идем на логин
+          setMessage('Нет токена в URL. Перенаправление...')
           setTimeout(() => {
             window.location.href = '/login'
-          }, 1500)
+          }, 2000)
         }
       } catch (error) {
         console.error('Ошибка:', error)
         setMessage('Произошла ошибка...')
         setTimeout(() => {
           window.location.href = '/login'
-        }, 1500)
+        }, 2000)
       }
     }
 
