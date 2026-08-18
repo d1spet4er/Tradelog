@@ -39,13 +39,8 @@ export default function TradeChart({ trade, roundTrip }) {
     })
 
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#36d98b',
-      downColor: '#ff5d73',
-      borderVisible: false,
-      wickUpColor: '#36d98b',
-      wickDownColor: '#ff5d73',
-      priceLineVisible: false,
-      lastValueVisible: false,
+      upColor: '#36d98b', downColor: '#ff5d73', borderVisible: false,
+      wickUpColor: '#36d98b', wickDownColor: '#ff5d73', priceLineVisible: false, lastValueVisible: false,
     })
 
     chartRef.current = chart
@@ -60,18 +55,28 @@ export default function TradeChart({ trade, roundTrip }) {
     }
   }, [])
 
+  // Depend on the actual chart inputs, not the object references.
+  // Trades.jsx creates new object literals on every journal keystroke;
+  // depending on [trade, roundTrip] therefore caused a Binance request and
+  // chart redraw for every character typed into a textarea.
+  const symbol = trade?.symbol
+  const tradeTime = trade?.trade_time
+  const entryTime = roundTrip?.entryTime || tradeTime
+  const exitTime = roundTrip?.exitTime || null
+  const entryPrice = roundTrip?.entryPrice
+  const exitPrice = roundTrip?.exitPrice
+  const closed = Boolean(roundTrip?.closed)
+
   useEffect(() => {
     let cancelled = false
 
     async function loadCandles() {
-      if (!seriesRef.current || !trade?.symbol || !trade?.trade_time) return
+      if (!seriesRef.current || !symbol || !tradeTime) return
       setLoading(true)
       setError('')
       try {
-        const entryTime = roundTrip?.entryTime || trade.trade_time
-        const exitTime = roundTrip?.exitTime || null
         const { start, end } = getWindow(interval, entryTime, exitTime)
-        const params = new URLSearchParams({ symbol: String(trade.symbol).toUpperCase(), interval, startTime: String(start * 1000), endTime: String(end * 1000), limit: '1500' })
+        const params = new URLSearchParams({ symbol: String(symbol).toUpperCase(), interval, startTime: String(start * 1000), endTime: String(end * 1000), limit: '1500' })
         const response = await fetch(`https://fapi.binance.com/fapi/v1/klines?${params}`)
         if (!response.ok) throw new Error(`Binance: HTTP ${response.status}`)
         const rows = await response.json()
@@ -89,7 +94,6 @@ export default function TradeChart({ trade, roundTrip }) {
 
         const entryCandle = nearest(entryTime)
         const exitCandle = exitTime ? nearest(exitTime) : null
-
         const markers = []
         if (entryCandle) markers.push({ time: entryCandle.time, position: 'belowBar', color: '#36d98b', shape: 'arrowUp' })
         if (exitCandle) markers.push({ time: exitCandle.time, position: 'aboveBar', color: '#ff5d73', shape: 'arrowDown' })
@@ -98,26 +102,11 @@ export default function TradeChart({ trade, roundTrip }) {
         for (const line of priceLinesRef.current) seriesRef.current.removePriceLine(line)
         priceLinesRef.current = []
 
-        if (Number.isFinite(Number(roundTrip?.entryPrice))) {
-          priceLinesRef.current.push(seriesRef.current.createPriceLine({
-            price: Number(roundTrip.entryPrice),
-            color: '#36d98b',
-            lineWidth: 2,
-            lineStyle: 0,
-            axisLabelVisible: true,
-            title: 'Entry',
-          }))
+        if (Number.isFinite(Number(entryPrice))) {
+          priceLinesRef.current.push(seriesRef.current.createPriceLine({ price: Number(entryPrice), color: '#36d98b', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'Entry' }))
         }
-
-        if (exitCandle && Number.isFinite(Number(roundTrip?.exitPrice))) {
-          priceLinesRef.current.push(seriesRef.current.createPriceLine({
-            price: Number(roundTrip.exitPrice),
-            color: '#ff5d73',
-            lineWidth: 2,
-            lineStyle: 0,
-            axisLabelVisible: true,
-            title: 'Exit',
-          }))
+        if (exitCandle && Number.isFinite(Number(exitPrice))) {
+          priceLinesRef.current.push(seriesRef.current.createPriceLine({ price: Number(exitPrice), color: '#ff5d73', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'Exit' }))
         }
 
         const focusTimes = [entryCandle, exitCandle].filter(Boolean).map((item) => item.time)
@@ -134,7 +123,7 @@ export default function TradeChart({ trade, roundTrip }) {
 
     loadCandles()
     return () => { cancelled = true }
-  }, [trade, roundTrip, interval])
+  }, [symbol, tradeTime, entryTime, exitTime, entryPrice, exitPrice, closed, interval])
 
   return (
     <div className="trade-chart">
