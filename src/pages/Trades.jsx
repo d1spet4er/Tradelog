@@ -12,6 +12,7 @@ const DEPTH_OPTIONS = [
   { value: '365', label: 'Последний год' },
 ]
 const TAGS = ['Пробой', 'Ретест', 'Тренд', 'Импульс', 'FOMO', 'Ранний выход', 'По плану']
+const PAGE_SIZE = 15
 
 function displayExchange(exchange) {
   if (exchange === 'tiger-binance') return 'Tiger Trade — Binance Futures'
@@ -49,8 +50,21 @@ function Trades() {
   const [expandedId, setExpandedId] = useState(null)
   const [journals, setJournals] = useState({})
   const [journalLoaded, setJournalLoaded] = useState(false)
+  const [page, setPage] = useState(1)
 
   const trades = useMemo(() => aggregateTrades(fills), [fills])
+  const totalPages = Math.max(1, Math.ceil(trades.length / PAGE_SIZE))
+  const visibleTrades = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return trades.slice(start, start + PAGE_SIZE)
+  }, [trades, page])
+  const pageStart = trades.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const pageEnd = Math.min(page * PAGE_SIZE, trades.length)
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages)
+  }, [page, totalPages])
+
   const stats = useMemo(() => ({
     trades: trades.length,
     executions: fills.length,
@@ -187,6 +201,12 @@ function Trades() {
     updateJournal(trade, 'tags', tags)
   }
 
+  function changePage(nextPage) {
+    const safePage = Math.min(Math.max(nextPage, 1), totalPages)
+    setPage(safePage)
+    setExpandedId(null)
+  }
+
   return (
     <div className="trades-page">
       <div className="trades-page__topline">
@@ -257,136 +277,150 @@ function Trades() {
 
         {trades.length === 0 && <p>Сделок пока нет</p>}
 
-        {trades.length > 0 && <div className="trades-table-wrap">
-          <table className="trades-table">
-            <thead>
-              <tr>
-                <th className="expand-col" aria-label="Открыть" />
-                <th>Вход</th>
-                <th>Пара</th>
-                <th>Направление</th>
-                <th>Выход</th>
-                <th>Цена входа</th>
-                <th>Цена выхода</th>
-                <th>Размер</th>
-                <th>PnL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.map((trade) => {
-                const expanded = expandedId === trade.id
-                const journal = journals[trade.journalKey] || emptyJournal()
-                return (
-                  <Fragment key={trade.id}>
-                    <tr
-                      className={`trade-row ${expanded ? 'is-expanded' : ''}`}
-                      onClick={() => setExpandedId(expanded ? null : trade.id)}
-                    >
-                      <td className="expand-cell"><span className={`row-chevron ${expanded ? 'open' : ''}`}>›</span></td>
-                      <td><span className="date-cell">{formatDate(trade.entryTime)}</span></td>
-                      <td className="trade-symbol">{trade.symbol}</td>
-                      <td>
-                        <span className={`side-badge ${trade.direction === 'long' ? 'buy' : 'sell'}`}>
-                          <i />{trade.direction === 'long' ? 'LONG' : 'SHORT'}
-                        </span>
-                      </td>
-                      <td>{trade.closed ? <span className="date-cell">{formatDate(trade.exitTime)}</span> : <span className="open-position">Открыта</span>}</td>
-                      <td className="number-cell">{formatMoney(trade.entryPrice)}</td>
-                      <td className="number-cell">{trade.closed ? formatMoney(trade.exitPrice) : '—'}</td>
-                      <td className="number-cell">{formatNumber(trade.qty)}</td>
-                      <td className={`pnl-cell ${trade.pnl === null ? '' : trade.pnl >= 0 ? 'positive' : 'negative'}`}>
-                        {trade.pnl === null ? '—' : `${trade.pnl >= 0 ? '+' : ''}${formatMoney(trade.pnl)}`}
-                      </td>
-                    </tr>
+        {trades.length > 0 && <>
+          <div className="trades-table-wrap">
+            <table className="trades-table">
+              <thead>
+                <tr>
+                  <th className="expand-col" aria-label="Открыть" />
+                  <th>Вход</th>
+                  <th>Пара</th>
+                  <th>Направление</th>
+                  <th>Выход</th>
+                  <th>Цена входа</th>
+                  <th>Цена выхода</th>
+                  <th>Размер</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleTrades.map((trade) => {
+                  const expanded = expandedId === trade.id
+                  const journal = journals[trade.journalKey] || emptyJournal()
+                  return (
+                    <Fragment key={trade.id}>
+                      <tr
+                        className={`trade-row ${expanded ? 'is-expanded' : ''}`}
+                        onClick={() => setExpandedId(expanded ? null : trade.id)}
+                      >
+                        <td className="expand-cell"><span className={`row-chevron ${expanded ? 'open' : ''}`}>›</span></td>
+                        <td><span className="date-cell">{formatDate(trade.entryTime)}</span></td>
+                        <td className="trade-symbol">{trade.symbol}</td>
+                        <td>
+                          <span className={`side-badge ${trade.direction === 'long' ? 'buy' : 'sell'}`}>
+                            <i />{trade.direction === 'long' ? 'LONG' : 'SHORT'}
+                          </span>
+                        </td>
+                        <td>{trade.closed ? <span className="date-cell">{formatDate(trade.exitTime)}</span> : <span className="open-position">Открыта</span>}</td>
+                        <td className="number-cell">{formatMoney(trade.entryPrice)}</td>
+                        <td className="number-cell">{trade.closed ? formatMoney(trade.exitPrice) : '—'}</td>
+                        <td className="number-cell">{formatNumber(trade.qty)}</td>
+                        <td className={`pnl-cell ${trade.pnl === null ? '' : trade.pnl >= 0 ? 'positive' : 'negative'}`}>
+                          {trade.pnl === null ? '—' : `${trade.pnl >= 0 ? '+' : ''}${formatMoney(trade.pnl)}`}
+                        </td>
+                      </tr>
 
-                    {expanded && <tr className="trade-details-row"><td colSpan="9">
-                      <div className="trade-details">
-                        <div className="trade-details-header">
-                          <div>
-                            <span className="details-kicker">{trade.closed ? 'Закрытая позиция' : 'Открытая позиция'}</span>
-                            <h3>{trade.symbol} · {trade.direction === 'long' ? 'Long' : 'Short'}</h3>
-                          </div>
-                          <div className={`details-pnl ${trade.pnl === null ? '' : trade.pnl >= 0 ? 'positive' : 'negative'}`}>
-                            {trade.pnl === null ? 'В позиции' : `${trade.pnl >= 0 ? '+' : ''}${formatMoney(trade.pnl)}`}
-                          </div>
-                        </div>
-
-                        <TradeChart trade={{ ...trade, price: trade.entryPrice, trade_time: trade.entryTime }} roundTrip={trade} />
-
-                        <div className="trade-metrics">
-                          <div><span>Средний вход</span><strong>{formatMoney(trade.entryPrice)}</strong></div>
-                          <div><span>Средний выход</span><strong>{trade.closed ? formatMoney(trade.exitPrice) : '—'}</strong></div>
-                          <div><span>Количество</span><strong>{formatNumber(trade.qty)}</strong></div>
-                          <div><span>Время входа</span><strong>{formatDate(trade.entryTime)}</strong></div>
-                          <div><span>Время выхода</span><strong>{trade.closed ? formatDate(trade.exitTime) : '—'}</strong></div>
-                          <div><span>Комиссия</span><strong>{formatMoney(trade.commission)}</strong></div>
-                          <div><span>Исполнений</span><strong>{trade.fillCount}</strong></div>
-                          <div><span>Объём входа</span><strong>{formatMoney(trade.entryValue)}</strong></div>
-                        </div>
-
-                        <details className="executions-details" onClick={(event) => event.stopPropagation()}>
-                          <summary>Показать исполнения <span>· {trade.fillCount}</span></summary>
-                          <div className="executions-list">
-                            {trade.entryFills.map((fill) => (
-                              <div key={`e-${fill.id}`}>
-                                <span className="execution-side buy">BUY</span>
-                                <span>{formatDate(fill.trade_time)}</span>
-                                <span>{formatNumber(fill.qty)}</span>
-                                <span>{formatMoney(fill.price)}</span>
-                              </div>
-                            ))}
-                            {trade.exitFills.map((fill) => (
-                              <div key={`x-${fill.id}`}>
-                                <span className="execution-side sell">SELL</span>
-                                <span>{formatDate(fill.trade_time)}</span>
-                                <span>{formatNumber(fill.qty)}</span>
-                                <span>{formatMoney(fill.price)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-
-                        <div className="journal-section">
-                          <div className="journal-section__heading">
+                      {expanded && <tr className="trade-details-row"><td colSpan="9">
+                        <div className="trade-details">
+                          <div className="trade-details-header">
                             <div>
-                              <h4>Разбор сделки</h4>
-                              <p>Запиши, почему вошёл, почему вышел и что можно было сделать лучше.</p>
+                              <span className="details-kicker">{trade.closed ? 'Закрытая позиция' : 'Открытая позиция'}</span>
+                              <h3>{trade.symbol} · {trade.direction === 'long' ? 'Long' : 'Short'}</h3>
                             </div>
-                            <span>Автосохранение</span>
+                            <div className={`details-pnl ${trade.pnl === null ? '' : trade.pnl >= 0 ? 'positive' : 'negative'}`}>
+                              {trade.pnl === null ? 'В позиции' : `${trade.pnl >= 0 ? '+' : ''}${formatMoney(trade.pnl)}`}
+                            </div>
                           </div>
-                          <div className="journal-grid">
-                            <label className="journal-field">
-                              <span>Причина входа</span>
-                              <textarea value={journal.entry_reason} onClick={(e) => e.stopPropagation()} onChange={(e) => updateJournal(trade, 'entry_reason', e.target.value)} placeholder="Почему я открыл эту позицию? Какой был сетап?" />
-                            </label>
-                            <label className="journal-field">
-                              <span>Причина выхода</span>
-                              <textarea value={journal.exit_reason} onClick={(e) => e.stopPropagation()} onChange={(e) => updateJournal(trade, 'exit_reason', e.target.value)} placeholder="Почему я закрыл эту позицию? Был ли выход по плану?" />
-                            </label>
-                            <label className="journal-field journal-field-wide">
-                              <span>Описание сделки</span>
-                              <textarea value={journal.notes} onClick={(e) => e.stopPropagation()} onChange={(e) => updateJournal(trade, 'notes', e.target.value)} placeholder="Что происходило во время позиции? Что я думал? Какие ошибки заметил? Что стоит повторить в следующий раз?" />
-                            </label>
+
+                          <TradeChart trade={{ ...trade, price: trade.entryPrice, trade_time: trade.entryTime }} roundTrip={trade} />
+
+                          <div className="trade-metrics">
+                            <div><span>Средний вход</span><strong>{formatMoney(trade.entryPrice)}</strong></div>
+                            <div><span>Средний выход</span><strong>{trade.closed ? formatMoney(trade.exitPrice) : '—'}</strong></div>
+                            <div><span>Количество</span><strong>{formatNumber(trade.qty)}</strong></div>
+                            <div><span>Время входа</span><strong>{formatDate(trade.entryTime)}</strong></div>
+                            <div><span>Время выхода</span><strong>{trade.closed ? formatDate(trade.exitTime) : '—'}</strong></div>
+                            <div><span>Комиссия</span><strong>{formatMoney(trade.commission)}</strong></div>
+                            <div><span>Исполнений</span><strong>{trade.fillCount}</strong></div>
+                            <div><span>Объём входа</span><strong>{formatMoney(trade.entryValue)}</strong></div>
                           </div>
-                          <div className="journal-tags">
-                            <span>Теги</span>
-                            <div>
-                              {TAGS.map((tag) => (
-                                <button type="button" key={tag} className={journal.tags.includes(tag) ? 'tag active' : 'tag'} onClick={(e) => { e.stopPropagation(); toggleTag(trade, tag) }}>
-                                  {tag}
-                                </button>
+
+                          <details className="executions-details" onClick={(event) => event.stopPropagation()}>
+                            <summary>Показать исполнения <span>· {trade.fillCount}</span></summary>
+                            <div className="executions-list">
+                              {trade.entryFills.map((fill) => (
+                                <div key={`e-${fill.id}`}>
+                                  <span className="execution-side buy">BUY</span>
+                                  <span>{formatDate(fill.trade_time)}</span>
+                                  <span>{formatNumber(fill.qty)}</span>
+                                  <span>{formatMoney(fill.price)}</span>
+                                </div>
+                              ))}
+                              {trade.exitFills.map((fill) => (
+                                <div key={`x-${fill.id}`}>
+                                  <span className="execution-side sell">SELL</span>
+                                  <span>{formatDate(fill.trade_time)}</span>
+                                  <span>{formatNumber(fill.qty)}</span>
+                                  <span>{formatMoney(fill.price)}</span>
+                                </div>
                               ))}
                             </div>
+                          </details>
+
+                          <div className="journal-section">
+                            <div className="journal-section__heading">
+                              <div>
+                                <h4>Разбор сделки</h4>
+                                <p>Запиши, почему вошёл, почему вышел и что можно было сделать лучше.</p>
+                              </div>
+                              <span>Автосохранение</span>
+                            </div>
+                            <div className="journal-grid">
+                              <label className="journal-field">
+                                <span>Причина входа</span>
+                                <textarea value={journal.entry_reason} onClick={(e) => e.stopPropagation()} onChange={(e) => updateJournal(trade, 'entry_reason', e.target.value)} placeholder="Почему я открыл эту позицию? Какой был сетап?" />
+                              </label>
+                              <label className="journal-field">
+                                <span>Причина выхода</span>
+                                <textarea value={journal.exit_reason} onClick={(e) => e.stopPropagation()} onChange={(e) => updateJournal(trade, 'exit_reason', e.target.value)} placeholder="Почему я закрыл эту позицию? Был ли выход по плану?" />
+                              </label>
+                              <label className="journal-field journal-field-wide">
+                                <span>Описание сделки</span>
+                                <textarea value={journal.notes} onClick={(e) => e.stopPropagation()} onChange={(e) => updateJournal(trade, 'notes', e.target.value)} placeholder="Что происходило во время позиции? Что я думал? Какие ошибки заметил? Что стоит повторить в следующий раз?" />
+                              </label>
+                            </div>
+                            <div className="journal-tags">
+                              <span>Теги</span>
+                              <div>
+                                {TAGS.map((tag) => (
+                                  <button type="button" key={tag} className={journal.tags.includes(tag) ? 'tag active' : 'tag'} onClick={(e) => { e.stopPropagation(); toggleTag(trade, tag) }}>
+                                    {tag}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </td></tr>}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>}
+                      </td></tr>}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="trades-pagination">
+            <div className="trades-pagination__range">
+              {pageStart}–{pageEnd} из {trades.length}
+            </div>
+            <div className="trades-pagination__controls">
+              <button type="button" className="pagination-button" onClick={() => changePage(page - 1)} disabled={page === 1} aria-label="Предыдущая страница">‹</button>
+              <span className="pagination-page">{page} / {totalPages}</span>
+              <button type="button" className="pagination-button" onClick={() => changePage(page + 1)} disabled={page === totalPages} aria-label="Следующая страница">›</button>
+            </div>
+            <div className="trades-pagination__size">15 сделок на странице</div>
+          </div>
+        </>}
       </section>
     </div>
   )
