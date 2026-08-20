@@ -3,80 +3,66 @@ import { encrypt } from "../_shared/crypto.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, api-key, content-type",
 };
 
+const PASSPHRASE_EXCHANGES = new Set(["okx", "bitget", "kucoin"]);
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Нет авторизации" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    if (!authHeader) return json({ ok: false, error: "Нет авторизации" }, 401);
 
     const userClient = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
+      { global: { headers: { Authorization: authHeader } } },
     );
 
     const { data: { user }, error: userError } = await userClient.auth.getUser();
-    if (userError || !user) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Не удалось определить пользователя" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    if (userError || !user) return json({ ok: false, error: "Не удалось определить пользователя" }, 401);
 
     const { exchange, label, apiKey, apiSecret, apiPassphrase, market } = await req.json();
 
     if (!exchange || !apiKey || !apiSecret) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "exchange, apiKey и apiSecret обязательны" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ ok: false, error: "exchange, apiKey и apiSecret обязательны" }, 400);
     }
 
-    const encryptedKey = await encrypt(apiKey);
-    const encryptedSecret = await encrypt(apiSecret);
-    const encryptedPassphrase = apiPassphrase ? await encrypt(apiPassphrase) : null;
+    if (PASSPHRASE_EXCHANGES.has(exchange) && !String(apiPassphrase || "").trim()) {
+      return json({ ok: false, error: `Для ${exchange.toUpperCase()} обязательно указать Passphrase` }, 400);
+    }
+
+    const encryptedKey = await encrypt(String(apiKey));
+    const encryptedSecret = await encrypt(String(apiSecret));
+    const encryptedPassphrase = apiPassphrase ? await encrypt(String(apiPassphrase)) : null;
 
     const adminClient = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
     const { error: insertError } = await adminClient.from("exchange_keys").insert({
       user_id: user.id,
       exchange,
-      label,
+      label: label || null,
       api_key: encryptedKey,
       api_secret: encryptedSecret,
       api_passphrase: encryptedPassphrase,
       market: market || "spot",
     });
 
-    if (insertError) {
-      return new Response(
-        JSON.stringify({ ok: false, error: insertError.message }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    return new Response(
-      JSON.stringify({ ok: true }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    if (insertError) return json({ ok: false, error: insertError.message }, 400);
+    return json({ ok: true });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ ok: false, error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
   }
 });
