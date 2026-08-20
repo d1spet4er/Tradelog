@@ -1,14 +1,25 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { createHmac } from "node:crypto";
 import { decrypt } from "../_shared/crypto.ts";
+import { createCcxtExchange, isCcxtExchange, ccxtErrorMessage } from "../_shared/ccxt.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-type CheckResult = { ok: true; accountType?: string; canTrade?: boolean } | { ok: false; error: string };
+type CheckResult =
+  | { ok: true; accountType?: string; canTrade?: boolean }
+  | { ok: false; error: string };
+
 type Creds = { apiKey: string; apiSecret: string; apiPassphrase?: string | null };
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
 
 function binanceSignedUrl(path: string, apiSecret: string, params: Record<string, string | number>) {
   const query = new URLSearchParams();
@@ -29,44 +40,58 @@ async function checkBinance({ apiKey, apiSecret }: Creds): Promise<CheckResult> 
   return { ok: true, accountType: "futures", canTrade: Boolean(data.canTrade) };
 }
 
-const checkers: Record<string, (creds: Creds) => Promise<CheckResult>> = {
-  binance: checkBinance,
-  "tiger-binance": checkBinance,
-};
+async function checkCcxt(exchangeId: string, creds: Creds): Promise<CheckResult> {
+  try {
+    const exchange = createCcxtExchange(exchangeId, creds.apiKey, creds.apiSecret, creds.apiPassphrase);
+    if (!exchange.has?.fetchBalance) {
+      throw new Error("API этой биржи не предоставляет проверку баланса через CCXT");
+    }
+
+    await exchange.fetchBalance();
+    return { ok: true, accountType: "futures", canTrade: true };
+  } catch (error) {
+    return { ok: false, error: ccxtErrorMessage(error) };
+  }
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return new Response(JSON.stringify({ ok: false, error: "Нет авторизации" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (!authHeader) return json({ ok: false, error: "Нет авторизации" }, 401);
 
     const { keyId } = await req.json();
-    if (!keyId) return new Response(JSON.stringify({ ok: false, error: "keyId обязателен" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (!keyId) return json({ ok: false, error: "keyId обязателен" }, 400);
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
+      { global: { headers: { Authorization: authHeader } } },
     );
 
     const { data: keyRecord, error: fetchError } = await supabase
       .from("exchange_keys")
-      .select("exchange, api_key, api_secret")
+      .select("exchange, api_key, api_secret, api_passphrase")
       .eq("id", keyId)
       .single();
 
-    if (fetchError || !keyRecord) return new Response(JSON.stringify({ ok: false, error: "Ключ не найден или нет доступа" }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-    const checker = checkers[keyRecord.exchange];
-    if (!checker) return new Response(JSON.stringify({ ok: false, error: `Проверка для ${keyRecord.exchange} пока не поддерживается` }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (fetchError || !keyRecord) return json({ ok: false, error: "Ключ не найден или нет доступа" }, 404);
 
     const apiKey = await decrypt(keyRecord.api_key);
     const apiSecret = await decrypt(keyRecord.api_secret);
-    const result = await checker({ apiKey, apiSecret });
+    const apiPassphrase = keyRecord.api_passphrase ? await decrypt(keyRecord.api_passphrase) : null;
 
-    return new Response(JSON.stringify(result), { status: result.ok ? 200 : 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (keyRecord.exchange === "binance" || keyRecord.exchange === "tiger-binance") {
+      return json(await checkBinance({ apiKey, apiSecret }));
+    }
+
+    if (isCcxtExchange(keyRecord.exchange)) {
+      return json(await checkCcxt(keyRecord.exchange, { apiKey, apiSecret, apiPassphrase }));
+    }
+
+    return json({ ok: false, error: `Проверка для ${keyRecord.exchange} пока не поддерживается` }, 400);
   } catch (err) {
-    return new Response(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
   }
 });
