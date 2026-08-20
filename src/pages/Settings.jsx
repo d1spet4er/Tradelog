@@ -94,7 +94,11 @@ function Settings() {
       alert('Ошибка проверки: ' + (await extractErrorMessage(error)))
     } else if (data.ok) {
       setCheckStatus((s) => ({ ...s, [id]: 'ok' }))
-      alert(`Ключ рабочий. Тип аккаунта: ${data.accountType}, торговля разрешена: ${data.canTrade}`)
+      const account = data.accountType ? ` Тип: ${data.accountType}.` : ''
+      const tradePermission = data.canTrade === undefined || data.canTrade === null
+        ? ''
+        : ` Торговля разрешена: ${data.canTrade ? 'да' : 'нет'}.`
+      alert(`Ключ рабочий.${account}${tradePermission}`)
     } else {
       setCheckStatus((s) => ({ ...s, [id]: 'fail' }))
       alert('Ошибка проверки: ' + data.error)
