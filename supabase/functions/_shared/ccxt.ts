@@ -8,21 +8,37 @@ import {
 } from "npm:ccxt@4.5.74";
 
 type ExchangeCtor = new (config: Record<string, unknown>) => any;
+type ExchangeConfig = { Ctor: ExchangeCtor; options?: Record<string, unknown> };
 
-const EXCHANGE_CONFIG: Record<string, { Ctor: ExchangeCtor; options?: Record<string, unknown> }> = {
-  bybit: { Ctor: bybit, options: { defaultType: "swap", defaultSubType: "linear" } },
-  "tiger-bybit": { Ctor: bybit, options: { defaultType: "swap", defaultSubType: "linear" } },
+const EXCHANGE_CONFIG: Record<string, ExchangeConfig> = {
+  bybit: {
+    Ctor: bybit,
+    options: { defaultType: "swap", defaultSubType: "linear", adjustForTimeDifference: true },
+  },
+  "tiger-bybit": {
+    Ctor: bybit,
+    options: { defaultType: "swap", defaultSubType: "linear", adjustForTimeDifference: true },
+  },
   okx: {
     Ctor: okx,
-    options: {
-      defaultType: "swap",
-      fetchMarkets: { types: ["swap"] },
-    },
+    options: { defaultType: "swap", fetchMarkets: { types: ["swap"] }, adjustForTimeDifference: true },
   },
-  mexc: { Ctor: mexc, options: { defaultType: "swap" } },
-  bitget: { Ctor: bitget, options: { defaultType: "swap" } },
-  gate: { Ctor: gateio, options: { defaultType: "swap", defaultSettle: "usdt" } },
-  kucoin: { Ctor: kucoinfutures },
+  mexc: {
+    Ctor: mexc,
+    options: { defaultType: "swap", adjustForTimeDifference: true },
+  },
+  bitget: {
+    Ctor: bitget,
+    options: { defaultType: "swap", adjustForTimeDifference: true },
+  },
+  gate: {
+    Ctor: gateio,
+    options: { defaultType: "swap", defaultSettle: "usdt", adjustForTimeDifference: true },
+  },
+  kucoin: {
+    Ctor: kucoinfutures,
+    options: { adjustForTimeDifference: true },
+  },
 };
 
 export function isCcxtExchange(exchange: string): boolean {
@@ -38,14 +54,18 @@ export function createCcxtExchange(
   const config = EXCHANGE_CONFIG[exchange];
   if (!config) throw new Error(`Биржа ${exchange} не поддерживается`);
 
-  return new config.Ctor({
+  const exchangeConfig: Record<string, unknown> = {
     apiKey,
     secret: apiSecret,
-    password: passphrase || undefined,
     enableRateLimit: true,
     timeout: 30000,
     options: config.options || {},
-  });
+  };
+
+  // CCXT uses `password` for the passphrase on OKX, Bitget and KuCoin Futures.
+  if (passphrase) exchangeConfig.password = passphrase;
+
+  return new config.Ctor(exchangeConfig);
 }
 
 export function ccxtErrorMessage(error: unknown): string {
