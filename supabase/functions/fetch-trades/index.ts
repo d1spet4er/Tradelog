@@ -2,10 +2,23 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { createHmac } from "node:crypto";
 import JSZip from "npm:jszip@3.10.1";
 import { decrypt } from "../_shared/crypto.ts";
+import { createCcxtExchange, isCcxtExchange, ccxtErrorMessage } from "../_shared/ccxt.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+const MS_DAY = 86400000;
+const BINANCE_EXCHANGES = new Set(["binance", "tiger-binance"]);
+const CCXT_MAX_DAYS: Record<string, number> = {
+  bybit: 365,
+  "tiger-bybit": 365,
+  okx: 90,
+  mexc: 90,
+  bitget: 90,
+  gate: 90,
+  kucoin: 90,
 };
 
 type NormalizedTrade = {
@@ -22,8 +35,6 @@ type NormalizedTrade = {
   trade_time: string;
 };
 
-const BINANCE_EXCHANGES = new Set(["binance", "tiger-binance"]);
-
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -39,23 +50,13 @@ function signQuery(secret: string, params: Record<string, string | number>) {
   return { queryString, signature };
 }
 
-async function binanceSignedGet(
-  apiKey: string,
-  apiSecret: string,
-  path: string,
-  params: Record<string, string | number>
-) {
+async function binanceSignedGet(apiKey: string, apiSecret: string, path: string, params: Record<string, string | number>) {
   const signedParams = { ...params, timestamp: Date.now(), recvWindow: 5000 };
   const { queryString, signature } = signQuery(apiSecret, signedParams);
   const url = `https://fapi.binance.com${path}?${queryString}&signature=${signature}`;
-
   const res = await fetch(url, { headers: { "X-MBX-APIKEY": apiKey } });
   const data = await res.json();
-
-  if (!res.ok) {
-    throw new Error(data?.msg || `Binance API ${res.status}`);
-  }
-
+  if (!res.ok) throw new Error(data?.msg || `Binance API ${res.status}`);
   return data;
 }
 
@@ -63,21 +64,15 @@ function normalizeBinanceTrade(t: any, exchange: string): NormalizedTrade {
   const time = Number(t.time ?? t.timestamp ?? t.Time);
   return {
     exchange,
-    symbol: String(t.symbol ?? t.Symbol ?? ""),
-    exchange_trade_id: String(t.id ?? t.tradeId ?? t.tradeID ?? t.Id ?? ""),
-    order_id: t.orderId == null ? (t.OrderId == null ? null : String(t.OrderId)) : String(t.orderId),
+    symbol: String(t.symbol ?? t.Symbol ?? "").trim(),
+    exchange_trade_id: String(t.id ?? t.tradeId ?? t.tradeID ?? t.Id ?? `${t.orderId ?? "trade"}-${time}`),
+    order_id: t.orderId == null ? null : String(t.orderId),
     side: t.side ? String(t.side).toLowerCase() : t.buyer === true || t.isBuyer === true ? "buy" : "sell",
     price: Number.isFinite(Number(t.price ?? t.Price)) ? Number(t.price ?? t.Price) : null,
     qty: Number.isFinite(Number(t.qty ?? t.quantity ?? t.Quantity)) ? Number(t.qty ?? t.quantity ?? t.Quantity) : null,
-    quote_qty: Number.isFinite(Number(t.quoteQty ?? t.quoteQuantity ?? t.QuoteQty))
-      ? Number(t.quoteQty ?? t.quoteQuantity ?? t.QuoteQty)
-      : null,
-    commission: Number.isFinite(Number(t.commission ?? t.Commission))
-      ? Number(t.commission ?? t.Commission)
-      : null,
-    commission_asset: t.commissionAsset == null
-      ? (t.CommissionAsset == null ? null : String(t.CommissionAsset))
-      : String(t.commissionAsset),
+    quote_qty: Number.isFinite(Number(t.quoteQty ?? t.quoteQuantity ?? t.QuoteQty)) ? Number(t.quoteQty ?? t.quoteQuantity ?? t.QuoteQty) : null,
+    commission: Number.isFinite(Number(t.commission ?? t.Commission)) ? Number(t.commission ?? t.Commission) : null,
+    commission_asset: t.commissionAsset == null ? null : String(t.commissionAsset),
     trade_time: Number.isFinite(time) ? new Date(time).toISOString() : new Date().toISOString(),
   };
 }
@@ -86,476 +81,159 @@ function parseCsvLine(line: string): string[] {
   const result: string[] = [];
   let current = "";
   let quoted = false;
-
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (ch === '"') {
-      if (quoted && line[i + 1] === '"') {
-        current += '"';
-        i += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (ch === "," && !quoted) {
-      result.push(current);
-      current = "";
-    } else {
-      current += ch;
-    }
+      if (quoted && line[i + 1] === '"') { current += '"'; i += 1; }
+      else quoted = !quoted;
+    } else if (ch === "," && !quoted) { result.push(current); current = ""; }
+    else current += ch;
   }
-
   result.push(current);
   return result;
 }
 
 function parseCsv(text: string): Record<string, string>[] {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim());
   if (lines.length < 2) return [];
-
   const headers = parseCsvLine(lines[0]).map((h) => h.trim());
   return lines.slice(1).map((line) => {
     const values = parseCsvLine(line);
-    const row: Record<string, string> = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
-    });
-    return row;
+    return Object.fromEntries(headers.map((header, i) => [header, values[i] ?? ""]));
   });
 }
 
-function normalizeExportRow(
-  row: Record<string, string>,
-  exchange: string,
-  index: number
-): NormalizedTrade | null {
-  const normalizedRow: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(row)) {
-    const normalizedKey = key
-      .replace(/^\uFEFF/, '')
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
-
-    normalizedRow[normalizedKey] = String(value ?? '').trim();
-  }
-
-  const get = (...names: string[]) => {
-    for (const name of names) {
-      const key = name
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ');
-
-      const value = normalizedRow[key];
-
-      if (value !== undefined && value !== '') {
-        return value;
-      }
-    }
-
-    return null;
-  };
-
-  const symbol = get(
-    'symbol',
-    'pair',
-    'ticker',
-    'market'
-  );
-
-  const timeRaw = get(
-    'time',
-    'timestamp',
-    'date',
-    'date(utc)',
-    'datetime',
-    'utc_time',
-    'trade time',
-    'time(utc)'
-  );
-
-  // Для Binance Futures экспорт может не содержать trade ID.
-  // Поэтому ID делаем необязательным.
-  if (!symbol || !timeRaw) {
-    return null;
-  }
-
+function normalizeExportRow(row: Record<string, string>, exchange: string, index: number): NormalizedTrade | null {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(row)) normalized[key.replace(/^\uFEFF/, "").trim().toLowerCase().replace(/\s+/g, " ")] = String(value ?? "").trim();
+  const get = (...names: string[]) => names.map((name) => normalized[name.toLowerCase().replace(/\s+/g, " ")]).find((value) => value !== undefined && value !== "") ?? null;
+  const symbol = get("symbol", "pair", "ticker", "market");
+  const timeRaw = get("time", "timestamp", "date", "date(utc)", "datetime", "utc_time", "trade time", "time(utc)");
+  if (!symbol || !timeRaw) return null;
   let time = Number(timeRaw);
-
-  if (!Number.isFinite(time)) {
-    const parsed = Date.parse(timeRaw);
-    time = parsed;
-  }
-
-  if (!Number.isFinite(time)) {
-    return null;
-  }
-
-  // Если timestamp пришёл в секундах, переводим в миллисекунды.
-  if (time > 0 && time < 100000000000) {
-    time *= 1000;
-  }
-
-  const sideRaw = get(
-    'side',
-    'type'
-  );
-
-  const buyerRaw = get(
-    'buyer',
-    'isbuyer',
-    'is buyer'
-  );
-
-  const orderId = get(
-    'orderid',
-    'order id',
-    'order_id'
-  );
-
-  const priceRaw = get(
-    'price'
-  );
-
-  const qtyRaw = get(
-    'qty',
-    'quantity',
-    'executed',
-    'executed quantity',
-    'executedqty'
-  );
-
-  const quoteQtyRaw = get(
-    'quoteqty',
-    'quote quantity',
-    'quote_qty',
-    'quote amount',
-    'amount',
-    'total'
-  );
-
-  const commissionRaw = get(
-    'commission',
-    'fee'
-  );
-
-  const commissionAsset = get(
-    'commissionasset',
-    'commission asset',
-    'fee coin',
-    'fee currency'
-  );
-
-  const tradeIdRaw = get(
-    'id',
-    'tradeid',
-    'trade id',
-    'trade_id',
-    'trade id.'
-  );
-
-  const tradeId =
-    tradeIdRaw ||
-    `${symbol}-${time}-${index}`;
-
-  let commission: number | null = null;
-
-  if (commissionRaw) {
-    const match = commissionRaw
-      .replace(',', '.')
-      .match(/-?\d+(?:\.\d+)?/);
-
-    if (match) {
-      const parsed = Number(match[0]);
-
-      if (Number.isFinite(parsed)) {
-        commission = parsed;
-      }
-    }
-  }
-
-  const parseNumber = (value: string | null): number | null => {
-    if (!value) {
-      return null;
-    }
-
-    const normalized = value
-      .replace(/\s/g, '')
-      .replace(',', '.');
-
-    const parsed = Number(normalized);
-
-    return Number.isFinite(parsed)
-      ? parsed
-      : null;
+  if (!Number.isFinite(time)) time = Date.parse(timeRaw);
+  if (!Number.isFinite(time)) return null;
+  if (time > 0 && time < 100000000000) time *= 1000;
+  const num = (value: string | null) => {
+    if (!value) return null;
+    const n = Number(value.replace(/\s/g, "").replace(",", "."));
+    return Number.isFinite(n) ? n : null;
   };
-
-  const price = parseNumber(priceRaw);
-  const qty = parseNumber(qtyRaw);
-  const quoteQty = parseNumber(quoteQtyRaw);
-
+  const sideRaw = get("side", "type");
+  const buyerRaw = get("buyer", "isbuyer", "is buyer");
   let side: string | null = null;
-
   if (sideRaw) {
-    const normalizedSide = sideRaw.toLowerCase();
-
-    if (
-      normalizedSide.includes('buy') ||
-      normalizedSide.includes('long')
-    ) {
-      side = 'buy';
-    } else if (
-      normalizedSide.includes('sell') ||
-      normalizedSide.includes('short')
-    ) {
-      side = 'sell';
-    } else {
-      side = normalizedSide;
-    }
-  } else if (buyerRaw) {
-    side = buyerRaw.toLowerCase() === 'true'
-      ? 'buy'
-      : 'sell';
-  }
-
+    const s = sideRaw.toLowerCase();
+    side = s.includes("buy") || s.includes("long") ? "buy" : s.includes("sell") || s.includes("short") ? "sell" : s;
+  } else if (buyerRaw) side = buyerRaw.toLowerCase() === "true" ? "buy" : "sell";
+  const tradeId = get("id", "tradeid", "trade id", "trade_id") || `${symbol}-${time}-${index}`;
+  const commissionRaw = get("commission", "fee");
   return {
     exchange,
-
     symbol: String(symbol).trim(),
-
     exchange_trade_id: String(tradeId),
-
-    order_id: orderId
-      ? String(orderId)
-      : null,
-
+    order_id: get("orderid", "order id", "order_id"),
     side,
-
-    price,
-
-    qty,
-
-    quote_qty: quoteQty,
-
-    commission,
-
-    commission_asset: commissionAsset
-      ? String(commissionAsset)
-      : null,
-
+    price: num(get("price")),
+    qty: num(get("qty", "quantity", "executed", "executed quantity", "executedqty")),
+    quote_qty: num(get("quoteqty", "quote quantity", "quote_qty", "quote amount", "amount", "total")),
+    commission: num(commissionRaw),
+    commission_asset: get("commissionasset", "commission asset", "fee coin", "fee currency"),
     trade_time: new Date(time).toISOString(),
   };
 }
 
-async function parseBinanceExport(
-  url: string,
-  exchange: string
-): Promise<NormalizedTrade[]> {
+async function parseBinanceExport(url: string, exchange: string): Promise<NormalizedTrade[]> {
   const res = await fetch(url);
+  if (!res.ok) throw new Error(`Не удалось скачать историю Binance: HTTP ${res.status}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const all: NormalizedTrade[] = [];
 
-  if (!res.ok) {
-    throw new Error(
-      `Не удалось скачать историю Binance: HTTP ${res.status}`
-    );
-  }
-
-  const bytes = new Uint8Array(
-    await res.arrayBuffer()
-  );
-
-  if (
-    bytes[0] === 0x50 &&
-    bytes[1] === 0x4b
-  ) {
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const zip = await JSZip.loadAsync(bytes);
-
-    const files = Object.values(zip.files)
-      .filter((file) => !file.dir)
-      .filter((file) => /\.csv$/i.test(file.name));
-
-    if (files.length === 0) {
-      throw new Error(
-        'В архиве Binance не найден CSV-файл с историей сделок'
-      );
-    }
-
-    const allTrades: NormalizedTrade[] = [];
-
-    for (const file of files) {
-      const text = await file.async('text');
-
-      if (!text.trim()) {
-        continue;
-      }
-
-      if (text.trimStart().startsWith('[')) {
-        try {
-          const data = JSON.parse(text);
-
-          if (Array.isArray(data)) {
-            for (const [index, trade] of data.entries()) {
-              allTrades.push(
-                normalizeBinanceTrade(
-                  trade,
-                  exchange
-                )
-              );
-            }
-          }
-        } catch {
-          continue;
-        }
-
-        continue;
-      }
-
-      const rows = parseCsv(text);
-
-      for (const [index, row] of rows.entries()) {
-        const trade = normalizeExportRow(
-          row,
-          exchange,
-          index
-        );
-
-        if (trade) {
-          allTrades.push(trade);
-        }
+    for (const file of Object.values(zip.files).filter((f) => !f.dir && /\.csv$/i.test(f.name))) {
+      const text = await file.async("text");
+      if (text.trimStart().startsWith("[")) {
+        try { const data = JSON.parse(text); if (Array.isArray(data)) all.push(...data.map((t) => normalizeBinanceTrade(t, exchange))); } catch {}
+      } else {
+        parseCsv(text).forEach((row, i) => { const trade = normalizeExportRow(row, exchange, i); if (trade) all.push(trade); });
       }
     }
-
-    const seen = new Set<string>();
-
-    return allTrades.filter((trade) => {
-      const key =
-        `${trade.symbol}:${trade.exchange_trade_id}`;
-
-      if (seen.has(key)) {
-        return false;
-      }
-
-      seen.add(key);
-
-      return true;
-    });
+  } else {
+    const text = new TextDecoder().decode(bytes);
+    if (text.trimStart().startsWith("[")) {
+      const data = JSON.parse(text);
+      if (Array.isArray(data)) all.push(...data.map((t) => normalizeBinanceTrade(t, exchange)));
+    } else parseCsv(text).forEach((row, i) => { const trade = normalizeExportRow(row, exchange, i); if (trade) all.push(trade); });
   }
 
-  const text = new TextDecoder().decode(bytes);
-
-  if (text.trimStart().startsWith('[')) {
-    const data = JSON.parse(text);
-
-    return (Array.isArray(data) ? data : [])
-      .map((trade) =>
-        normalizeBinanceTrade(
-          trade,
-          exchange
-        )
-      );
-  }
-
-  return parseCsv(text)
-    .map((row, index) =>
-      normalizeExportRow(
-        row,
-        exchange,
-        index
-      )
-    )
-    .filter(
-      (trade): trade is NormalizedTrade =>
-        Boolean(trade)
-    );
+  return dedupeTrades(all);
 }
 
-async function startBinanceExport(
-  apiKey: string,
-  apiSecret: string,
-  daysBack: number
-) {
+async function startBinanceExport(apiKey: string, apiSecret: string, daysBack: number) {
   const endTime = Date.now();
-  const startTime = endTime - Math.min(daysBack, 365) * 86400000;
-  return await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/trade/asyn", {
-    startTime,
-    endTime,
-  });
+  const startTime = endTime - Math.min(daysBack, 365) * MS_DAY;
+  return binanceSignedGet(apiKey, apiSecret, "/fapi/v1/trade/asyn", { startTime, endTime });
 }
 
-async function pollBinanceExport(
-  apiKey: string,
-  apiSecret: string,
-  downloadId: string,
-  exchange: string
-): Promise<{ status: "processing" | "completed"; trades?: NormalizedTrade[] }> {
-  const data = await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/trade/asyn/id", {
-    downloadId,
-  });
-
-  if (data.status !== "completed" || !data.url) {
-    return { status: "processing" };
-  }
-
-  const trades = await parseBinanceExport(data.url, exchange);
-  return { status: "completed", trades };
+async function pollBinanceExport(apiKey: string, apiSecret: string, downloadId: string, exchange: string) {
+  const data = await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/trade/asyn/id", { downloadId });
+  if (data.status !== "completed" || !data.url) return { status: "processing" as const };
+  return { status: "completed" as const, trades: await parseBinanceExport(data.url, exchange) };
 }
 
-async function fetchBinanceRecentTrades(
-  apiKey: string,
-  apiSecret: string,
-  exchange: string,
-  symbols: string[],
-  daysBack: number
-): Promise<NormalizedTrade[]> {
-  const uniqueSymbols = [...new Set(symbols.filter(Boolean))];
-  const now = Date.now();
-  const start = now - Math.min(daysBack, 180) * 86400000;
-  const chunkMs = 7 * 86400000;
+async function fetchBinanceRecentTrades(apiKey: string, apiSecret: string, exchange: string, symbols: string[], daysBack: number) {
   const result: NormalizedTrade[] = [];
-
-  for (const symbol of uniqueSymbols) {
+  const now = Date.now();
+  const start = now - Math.min(daysBack, 180) * MS_DAY;
+  for (const symbol of [...new Set(symbols.filter(Boolean))]) {
     let cursor = start;
-
     while (cursor < now) {
-      const end = Math.min(cursor + chunkMs, now);
-      let page = await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/userTrades", {
-        symbol,
-        startTime: cursor,
-        endTime: end,
-        limit: 1000,
-      });
-
-      let normalized = (Array.isArray(page) ? page : []).map((t) => normalizeBinanceTrade(t, exchange));
-      result.push(...normalized);
-
-      // If a 7-day window is full, continue by trade id so we don't silently lose rows.
+      const end = Math.min(cursor + 7 * MS_DAY, now);
+      let page = await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/userTrades", { symbol, startTime: cursor, endTime: end, limit: 1000 });
+      result.push(...(Array.isArray(page) ? page : []).map((t) => normalizeBinanceTrade(t, exchange)));
       while (Array.isArray(page) && page.length === 1000) {
-        const lastId = Number(page[page.length - 1]?.id);
+        const lastId = Number(page.at(-1)?.id);
         if (!Number.isFinite(lastId)) break;
-
-        page = await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/userTrades", {
-          symbol,
-          fromId: lastId + 1,
-          limit: 1000,
-        });
-
-        normalized = (Array.isArray(page) ? page : [])
-          .map((t) => normalizeBinanceTrade(t, exchange))
-          .filter((t) => {
-            const time = new Date(t.trade_time).getTime();
-            return time >= cursor && time <= end;
-          });
-
-        result.push(...normalized);
+        page = await binanceSignedGet(apiKey, apiSecret, "/fapi/v1/userTrades", { symbol, fromId: lastId + 1, limit: 1000 });
+        result.push(...(Array.isArray(page) ? page : []).map((t) => normalizeBinanceTrade(t, exchange)).filter((t) => {
+          const time = new Date(t.trade_time).getTime();
+          return time >= cursor && time <= end;
+        }));
         if (!Array.isArray(page) || page.length < 1000) break;
       }
-
       cursor = end;
     }
   }
+  return dedupeTrades(result);
+}
 
+function normalizeCcxtTrade(t: any, exchange: string): NormalizedTrade | null {
+  const timestamp = Number(t.timestamp ?? Date.parse(t.datetime ?? ""));
+  if (!Number.isFinite(timestamp) || !t.symbol) return null;
+  const price = Number(t.price);
+  const qty = Number(t.amount);
+  const cost = Number(t.cost);
+  const feeCost = Number(t.fee?.cost);
+  return {
+    exchange,
+    symbol: String(t.symbol),
+    exchange_trade_id: String(t.id || `${t.order || "trade"}-${timestamp}-${price}-${qty}`),
+    order_id: t.order ? String(t.order) : null,
+    side: t.side ? String(t.side).toLowerCase() : null,
+    price: Number.isFinite(price) ? price : null,
+    qty: Number.isFinite(qty) ? qty : null,
+    quote_qty: Number.isFinite(cost) ? cost : Number.isFinite(price * qty) ? price * qty : null,
+    commission: Number.isFinite(feeCost) ? feeCost : null,
+    commission_asset: t.fee?.currency ? String(t.fee.currency) : null,
+    trade_time: new Date(timestamp).toISOString(),
+  };
+}
+
+function dedupeTrades(trades: NormalizedTrade[]) {
   const seen = new Set<string>();
-  return result.filter((trade) => {
+  return trades.filter((trade) => {
+    if (!trade?.symbol || !trade?.exchange_trade_id) return false;
     const key = `${trade.symbol}:${trade.exchange_trade_id}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -563,102 +241,43 @@ async function fetchBinanceRecentTrades(
   });
 }
 
-const BYBIT_CATEGORIES = ["spot", "linear", "inverse"] as const;
-const MS_PER_DAY = 86400000;
-const BYBIT_CHUNK_DAYS = 7;
-const CONCURRENCY_LIMIT = 5;
-const BATCH_DELAY_MS = 350;
+async function fetchCcxtTrades(exchangeId: string, apiKey: string, apiSecret: string, passphrase: string | null, daysBack: number) {
+  const exchange = createCcxtExchange(exchangeId, apiKey, apiSecret, passphrase);
+  if (!exchange.has?.fetchMyTrades) throw new Error(`CCXT не поддерживает историю сделок для ${exchangeId}`);
+  await exchange.loadMarkets();
 
-function buildTimeChunks(daysBack: number): Array<{ start: number; end: number }> {
-  const chunks: Array<{ start: number; end: number }> = [];
-  let end = Date.now();
-  let remaining = daysBack;
+  const maxDays = Math.min(daysBack, CCXT_MAX_DAYS[exchangeId] ?? 90);
+  const start = Date.now() - maxDays * MS_DAY;
+  const now = Date.now();
+  const result: NormalizedTrade[] = [];
+  const chunkMs = 7 * MS_DAY;
 
-  while (remaining > 0) {
-    const size = Math.min(BYBIT_CHUNK_DAYS, remaining);
-    const start = end - size * MS_PER_DAY;
-    chunks.push({ start, end });
-    end = start;
-    remaining -= size;
+  for (let chunkStart = start; chunkStart < now; chunkStart += chunkMs) {
+    const chunkEnd = Math.min(chunkStart + chunkMs, now);
+    let cursor = chunkStart;
+    let stagnant = 0;
+
+    for (let pageNo = 0; pageNo < 20 && cursor < chunkEnd; pageNo += 1) {
+      const page = await exchange.fetchMyTrades(undefined, cursor, 1000, { until: chunkEnd });
+      if (!Array.isArray(page) || page.length === 0) break;
+      const normalized = page.map((t: any) => normalizeCcxtTrade(t, exchangeId)).filter(Boolean) as NormalizedTrade[];
+      result.push(...normalized.filter((t) => {
+        const time = new Date(t.trade_time).getTime();
+        return time >= chunkStart && time <= chunkEnd;
+      }));
+
+      const timestamps = page.map((t: any) => Number(t.timestamp)).filter(Number.isFinite);
+      if (!timestamps.length) break;
+      const oldest = Math.min(...timestamps);
+      const next = oldest + 1;
+      if (next <= cursor) { stagnant += 1; if (stagnant >= 2) break; }
+      else stagnant = 0;
+      cursor = next;
+      if (page.length < 1000) break;
+    }
   }
 
-  return chunks;
-}
-
-type ChunkResult = { trades: NormalizedTrade[]; error?: string };
-
-async function fetchBybitChunk(
-  apiKey: string,
-  apiSecret: string,
-  category: string,
-  start: number,
-  end: number
-): Promise<ChunkResult> {
-  const timestamp = Date.now().toString();
-  const recvWindow = "5000";
-  const query = `category=${category}&limit=100&startTime=${start}&endTime=${end}`;
-  const payload = timestamp + apiKey + recvWindow + query;
-  const signature = createHmac("sha256", apiSecret).update(payload).digest("hex");
-
-  const url = `https://api.bybit.com/v5/execution/list?${query}`;
-  const res = await fetch(url, {
-    headers: {
-      "X-BAPI-API-KEY": apiKey,
-      "X-BAPI-TIMESTAMP": timestamp,
-      "X-BAPI-RECV-WINDOW": recvWindow,
-      "X-BAPI-SIGN": signature,
-    },
-  });
-  const data = await res.json();
-
-  if (data.retCode !== 0) {
-    return { trades: [], error: data.retMsg || `Bybit retCode ${data.retCode}` };
-  }
-
-  const trades = (data.result?.list || []).map((t: any) => ({
-    exchange: "bybit",
-    symbol: t.symbol,
-    exchange_trade_id: t.execId,
-    order_id: t.orderId,
-    side: t.side?.toLowerCase() || null,
-    price: parseFloat(t.execPrice),
-    qty: parseFloat(t.execQty),
-    quote_qty: parseFloat(t.execValue),
-    commission: parseFloat(t.execFee),
-    commission_asset: t.feeCurrency || null,
-    trade_time: new Date(Number(t.execTime)).toISOString(),
-  }));
-
-  return { trades };
-}
-
-async function runLimited<T>(tasks: Array<() => Promise<T>>, limit: number, delayMs: number): Promise<T[]> {
-  const results: T[] = [];
-  for (let i = 0; i < tasks.length; i += limit) {
-    const batch = tasks.slice(i, i + limit);
-    const batchResults = await Promise.all(batch.map((fn) => fn()));
-    results.push(...batchResults);
-    if (i + limit < tasks.length) await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-  return results;
-}
-
-async function fetchBybitTrades(
-  apiKey: string,
-  apiSecret: string,
-  daysBack: number
-): Promise<{ trades: NormalizedTrade[]; errors: string[] }> {
-  const chunks = buildTimeChunks(daysBack);
-  const tasks: Array<() => Promise<ChunkResult>> = [];
-  for (const category of BYBIT_CATEGORIES) {
-    for (const chunk of chunks) tasks.push(() => fetchBybitChunk(apiKey, apiSecret, category, chunk.start, chunk.end));
-  }
-
-  const results = await runLimited(tasks, CONCURRENCY_LIMIT, BATCH_DELAY_MS);
-  return {
-    trades: results.flatMap((r) => r.trades),
-    errors: [...new Set(results.filter((r) => r.error).map((r) => r.error as string))],
-  };
+  return dedupeTrades(result);
 }
 
 Deno.serve(async (req) => {
@@ -673,97 +292,70 @@ Deno.serve(async (req) => {
     const daysBack = Math.min(Math.max(Number(body.daysBack || 365), 1), 365);
     const action = body.action || "sync";
     const downloadId = body.downloadId ? String(body.downloadId) : null;
-
     if (!keyId) return json({ ok: false, error: "keyId обязателен" }, 400);
 
     const userClient = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
+      { global: { headers: { Authorization: authHeader } } },
     );
-
     const { data: { user }, error: userError } = await userClient.auth.getUser();
     if (userError || !user) return json({ ok: false, error: "Не удалось определить пользователя" }, 401);
 
     const { data: keyRecord, error: fetchError } = await userClient
       .from("exchange_keys")
-      .select("exchange, api_key, api_secret")
+      .select("exchange, api_key, api_secret, api_passphrase")
       .eq("id", keyId)
       .single();
-
     if (fetchError || !keyRecord) return json({ ok: false, error: "Ключ не найден или нет доступа" }, 404);
 
     const apiKey = await decrypt(keyRecord.api_key);
     const apiSecret = await decrypt(keyRecord.api_secret);
+    const passphrase = keyRecord.api_passphrase ? await decrypt(keyRecord.api_passphrase) : null;
     const exchange = keyRecord.exchange;
-
     let trades: NormalizedTrade[] = [];
 
     if (BINANCE_EXCHANGES.has(exchange)) {
-      const displayExchange = exchange === "tiger-binance" ? "tiger.com" : "binance";
-
       if (action === "start-export") {
-        if (daysBack < 1 || daysBack > 365) return json({ ok: false, error: "Период Binance должен быть от 1 до 365 дней" }, 400);
         const started = await startBinanceExport(apiKey, apiSecret, daysBack);
         if (!started.downloadId) throw new Error(started.msg || "Binance не вернул downloadId");
         return json({ ok: true, pending: true, downloadId: String(started.downloadId) });
       }
-
       if (action === "poll-export") {
         if (!downloadId) return json({ ok: false, error: "downloadId обязателен" }, 400);
-        const result = await pollBinanceExport(apiKey, apiSecret, downloadId, displayExchange);
+        const result = await pollBinanceExport(apiKey, apiSecret, downloadId, exchange);
         if (result.status === "processing") return json({ ok: true, pending: true, downloadId });
         trades = result.trades || [];
       } else {
-        // First sync or requests older than six months use Binance's official all-symbol export.
-        const { count: existingCount } = await userClient
-          .from("trades")
-          .select("id", { count: "exact", head: true })
-          .eq("exchange_key_id", keyId);
-
+        const { count: existingCount } = await userClient.from("trades").select("id", { count: "exact", head: true }).eq("exchange_key_id", keyId);
         if (!existingCount || daysBack > 180) {
           const started = await startBinanceExport(apiKey, apiSecret, daysBack);
           if (!started.downloadId) throw new Error(started.msg || "Binance не вернул downloadId");
           return json({ ok: true, pending: true, downloadId: String(started.downloadId), started: true });
         }
-
-        const { data: symbolRows, error: symbolError } = await userClient
-          .from("trades")
-          .select("symbol")
-          .eq("exchange_key_id", keyId);
-
+        const { data: symbolRows, error: symbolError } = await userClient.from("trades").select("symbol").eq("exchange_key_id", keyId);
         if (symbolError) throw new Error(symbolError.message);
         const symbols = [...new Set((symbolRows || []).map((row) => row.symbol).filter(Boolean))];
-        trades = await fetchBinanceRecentTrades(apiKey, apiSecret, displayExchange, symbols, daysBack);
+        trades = await fetchBinanceRecentTrades(apiKey, apiSecret, exchange, symbols, daysBack);
       }
-    } else if (exchange === "bybit" || exchange === "tiger-bybit") {
-      const depth = Math.min(Math.max(daysBack, 1), 700);
-      const result = await fetchBybitTrades(apiKey, apiSecret, depth);
-      if (result.trades.length === 0 && result.errors.length > 0) return json({ ok: false, error: result.errors.join("; ") }, 400);
-      trades = result.trades;
+    } else if (isCcxtExchange(exchange)) {
+      trades = await fetchCcxtTrades(exchange, apiKey, apiSecret, passphrase, daysBack);
     } else {
       return json({ ok: false, error: `Загрузка сделок для ${exchange} пока не поддерживается` }, 400);
     }
 
     const rows = trades
       .filter((trade) => trade.symbol && trade.exchange_trade_id)
-      .map((t) => ({ user_id: user.id, exchange_key_id: keyId, ...t }));
-
+      .map((trade) => ({ user_id: user.id, exchange_key_id: keyId, ...trade }));
     if (rows.length === 0) return json({ ok: true, count: 0 });
 
-    const adminClient = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
-
+    const adminClient = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
     const { error: upsertError } = await adminClient
       .from("trades")
       .upsert(rows, { onConflict: "exchange_key_id,exchange_trade_id", ignoreDuplicates: true });
-
     if (upsertError) return json({ ok: false, error: upsertError.message }, 400);
-
-    return json({ ok: true, count: rows.length });
+    return json({ ok: true, count: rows.length, requestedDays: daysBack, importedDays: BINANCE_EXCHANGES.has(exchange) ? daysBack : Math.min(daysBack, CCXT_MAX_DAYS[exchange] ?? 90) });
   } catch (err) {
-    return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+    return json({ ok: false, error: ccxtErrorMessage(err) }, 500);
   }
 });
