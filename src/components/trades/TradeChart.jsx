@@ -70,21 +70,24 @@ function toPeriod(label) {
 }
 
 function normalize(rows) {
-  return rows.map((row) => ({
-    timestamp: Number(row[0]),
-    open: Number(row[1]),
-    high: Number(row[2]),
-    low: Number(row[3]),
-    close: Number(row[4]),
-    volume: Number(row[5]),
-    turnover: Number(row[7]),
-  }))
+  return rows
+    .map((row) => ({
+      timestamp: Number(row[0]),
+      open: Number(row[1]),
+      high: Number(row[2]),
+      low: Number(row[3]),
+      close: Number(row[4]),
+      volume: Number(row[5]),
+      turnover: Number(row[7]),
+    }))
+    .filter((row) => Number.isFinite(row.timestamp) && Number.isFinite(row.open) && Number.isFinite(row.high) && Number.isFinite(row.low) && Number.isFinite(row.close))
+    .sort((a, b) => a.timestamp - b.timestamp)
 }
 
 async function fetchKlines(symbol, interval, endTime, limit = 800, startTime = null) {
   const params = new URLSearchParams({ symbol: String(symbol).toUpperCase(), interval, limit: String(limit) })
-  if (startTime != null) params.set('startTime', String(Math.max(0, startTime)))
-  if (endTime != null) params.set('endTime', String(Math.max(0, endTime)))
+  if (startTime != null) params.set('startTime', String(Math.max(0, Math.floor(startTime))))
+  if (endTime != null) params.set('endTime', String(Math.max(0, Math.floor(endTime))))
   const response = await fetch(`https://fapi.binance.com/fapi/v1/klines?${params}`)
   if (!response.ok) throw new Error(`Binance: HTTP ${response.status}`)
   return normalize(await response.json())
@@ -159,26 +162,52 @@ export default function TradeChart({ trade, roundTrip }) {
     setActiveIndicators([])
 
     const interval = BINANCE_INTERVALS[period] || '5m'
-    const step = periodSeconds(period)
+    const stepMs = periodSeconds(period) * 1000
     const entry = new Date(entryTime).getTime()
     const exit = exitTime ? new Date(exitTime).getTime() : entry
     const center = Math.round((entry + exit) / 2)
-    const halfWindow = Math.max(step * 500, Math.abs(exit - entry) * 2 + step * 100)
+
+    // Binance uses milliseconds. The previous version accidentally mixed
+    // seconds with milliseconds, so the chart requested only a few minutes
+    // of history and often showed one candle. Keep a generous initial window.
+    const halfWindow = Math.max(
+      stepMs * 500,
+      Math.abs(exit - entry) * 2 + stepMs * 100,
+    )
+    const initialStart = Math.max(0, center - halfWindow)
+    const initialEnd = center + halfWindow
+
+    // KLineChart 10.x expects symbol + period before the data loader.
+    chart.setSymbol({ ticker: String(symbol).toUpperCase(), pricePrecision: 8, volumePrecision: 3 })
+    chart.setPeriod(toPeriod(period))
+    chart.setLeftMinVisibleBarCount(20)
+    chart.setRightMinVisibleBarCount(20)
+    chart.setMaxOffsetRightDistance(120)
 
     chart.setDataLoader({
       async getBars({ type, timestamp, callback }) {
         try {
           let rows
           if (type === 'init') {
-            rows = await fetchKlines(symbol, interval, center + halfWindow, 800, Math.max(0, center - halfWindow))
+            rows = await fetchKlines(symbol, interval, initialEnd, 800, initialStart)
           } else if (type === 'forward') {
-            const end = Number(timestamp || center)
-            rows = await fetchKlines(symbol, interval, end - 1, 800, Math.max(0, end - step * 800))
+            // Older candles (left side of the chart).
+            const end = Number(timestamp || initialStart)
+            rows = await fetchKlines(symbol, interval, end - 1, 800, Math.max(0, end - stepMs * 800))
           } else {
-            const start = Number(timestamp || center)
-            rows = await fetchKlines(symbol, interval, start + step * 800, 800, start + 1)
+            // Newer candles (right side of the chart).
+            const start = Number(timestamp || initialEnd)
+            rows = await fetchKlines(symbol, interval, start + 1 + stepMs * 799, 800, start + 1)
           }
-          if (!cancelled) callback(rows, true)
+
+          if (!cancelled) {
+            const hasMore = rows.length >= 800
+            callback(rows, type === 'init'
+              ? { forward: true, backward: true }
+              : type === 'forward'
+                ? { forward: hasMore, backward: true }
+                : { forward: true, backward: hasMore })
+          }
         } catch (e) {
           if (!cancelled) {
             setError(e.message || 'Не удалось загрузить историю Binance Futures')
@@ -189,17 +218,30 @@ export default function TradeChart({ trade, roundTrip }) {
         }
       },
     })
-    chart.setSymbol({ ticker: String(symbol).toUpperCase(), pricePrecision: 8, volumePrecision: 3 })
-    chart.setPeriod(toPeriod(period))
-    chart.setLeftMinVisibleBarCount(20)
-    chart.setRightMinVisibleBarCount(20)
-    chart.setMaxOffsetRightDistance(120)
 
     const focusTimer = window.setTimeout(() => {
       if (!cancelled) {
         chart.scrollToTimestamp(entry, 250)
-        if (Number.isFinite(entryPrice)) chart.createOverlay({ name: 'tradeLogMarker', id: 'trade-entry', points: [{ timestamp: entry, value: entryPrice }], extendData: { color: '#36d98b', label: 'ENTRY' }, mode: 'normal', lock: true })
-        if (exitTime && Number.isFinite(exitPrice)) chart.createOverlay({ name: 'tradeLogMarker', id: 'trade-exit', points: [{ timestamp: exit, value: exitPrice }], extendData: { color: '#ff4f6d', label: 'EXIT' }, mode: 'normal', lock: true })
+        if (Number.isFinite(entryPrice)) {
+          chart.createOverlay({
+            name: 'tradeLogMarker',
+            id: 'trade-entry',
+            points: [{ timestamp: entry, value: entryPrice }],
+            extendData: { color: '#36d98b', label: 'ENTRY' },
+            mode: 'normal',
+            lock: true,
+          })
+        }
+        if (exitTime && Number.isFinite(exitPrice)) {
+          chart.createOverlay({
+            name: 'tradeLogMarker',
+            id: 'trade-exit',
+            points: [{ timestamp: exit, value: exitPrice }],
+            extendData: { color: '#ff4f6d', label: 'EXIT' },
+            mode: 'normal',
+            lock: true,
+          })
+        }
       }
     }, 500)
     return () => { cancelled = true; window.clearTimeout(focusTimer) }
